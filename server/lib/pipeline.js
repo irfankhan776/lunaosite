@@ -76,6 +76,9 @@ export async function runPipeline({
     campaignId,
   });
 
+  // Log to stdout so Railway deploy logs show the pipeline starting.
+  console.log(`[pipeline] start campaignId=${campaignId} leads=${businesses.length} niche=${niche || '(per-row)'}`);
+
   // Phase A: compile + stage every personalized site.
   for (let i = 0; i < businesses.length; i++) {
     const biz = businesses[i];
@@ -106,9 +109,16 @@ export async function runPipeline({
       }
       emit('site:generated', { index, name: biz.name, slug, siteUrl, templateFile });
     } catch (err) {
+      // Always log the full error to stdout so it shows up in Railway deploy
+      // logs and is easy to diagnose. Previously this was only emitted as an
+      // SSE event which the dashboard's UI sometimes swallowed.
+      console.error(`[pipeline] site:failed #${index} "${biz.name}" (niche=${targetNiche}) -> ${err.message}`);
+      if (err.stack) console.error(err.stack);
       const result = {
         index,
         name: biz.name,
+        phone: biz.phone || '',
+        city: biz.city || '',
         slug,
         siteStatus: 'failed',
         smsStatus: 'skipped',
@@ -125,7 +135,7 @@ export async function runPipeline({
           refund(ownerKey, SITE_COST_PER_LEAD, 'site_failed_refund', { type: 'lead', id: String(leadId) });
         } catch (e) { /* ignore */ }
       }
-      emit('site:failed', { index, name: biz.name, slug, error: err.message });
+      emit('site:failed', { index, name: biz.name, slug, error: err.message, niche: targetNiche });
     }
   }
 
@@ -299,6 +309,7 @@ export async function runPipeline({
     telnyx: telnyx.live ? 'live' : telnyx.enabled ? 'simulated' : 'coming_soon',
     cloudflare: cloudflare.live ? 'live' : 'local',
   };
+  console.log(`[pipeline] done campaignId=${campaignId} sites=${summary.sitesGenerated}/${summary.total} sms=${summary.smsSent} failed=${summary.failed}`);
   emit('done', { summary, results });
   if (useDb) {
     finalizeCampaign(campaignId, {

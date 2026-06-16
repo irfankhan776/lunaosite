@@ -105,7 +105,18 @@ app.use((req, res, next) => {
 fs.mkdirSync(SITES_DIR, { recursive: true });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, mode: modeSummary() });
+  const health = {
+    ok: true,
+    mode: modeSummary(),
+    templates: templatesCheck,
+  };
+  // If templates are missing, the server is technically "up" but every campaign
+  // will silently fail. Surface that as !ok so the dashboard can warn the user.
+  if (!templatesCheck.ok) {
+    health.ok = false;
+    health.error = `Raw templates missing: ${templatesCheck.reason} at ${templatesCheck.path}. Campaigns will fail.`;
+  }
+  res.json(health);
 });
 
 // Compile a single business and return raw HTML (used for live preview/testing).
@@ -1113,6 +1124,28 @@ const PUBLIC_BASE =
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
     : PUBLIC_API_BASE_URL || `http://localhost:${PORT}`;
 
+// ---- Startup self-check ---------------------------------------------------
+// Verify the raw template directory is present and populated. On Railway, the
+// `public/templates-raw/` folder MUST be committed to git; if it isn't, every
+// campaign will silently fail with "Raw template not found" and the dashboard
+// will show "0 sites generated" with no obvious error. This check makes that
+// scenario loud and unmissable in the boot log and on /api/health.
+import { existsSync, readdirSync } from 'node:fs';
+import { TEMPLATES_RAW_DIR } from './lib/config.js';
+
+function checkTemplates() {
+  if (!existsSync(TEMPLATES_RAW_DIR)) {
+    return { ok: false, count: 0, path: TEMPLATES_RAW_DIR, reason: 'directory missing' };
+  }
+  const files = readdirSync(TEMPLATES_RAW_DIR).filter((f) => f.endsWith('.html'));
+  if (files.length === 0) {
+    return { ok: false, count: 0, path: TEMPLATES_RAW_DIR, reason: 'directory is empty' };
+  }
+  return { ok: true, count: files.length, path: TEMPLATES_RAW_DIR, reason: null };
+}
+
+export const templatesCheck = checkTemplates();
+
 app.listen(PORT, () => {
   const mode = modeSummary();
   console.log(`\n  Lunao pipeline API  ->  http://localhost:${PORT}`);
@@ -1124,5 +1157,13 @@ app.listen(PORT, () => {
   console.log(`  Chatbot            : ${mode.chatbot}`);
   console.log(`  Site base URL      : ${mode.siteBaseUrl}`);
   console.log(`  DB                 : ${process.env.DATABASE_URL ? 'Postgres (Railway)' : 'SQLite (local)'}`);
-  console.log(`  Auth cookies       : secure=${process.env.NODE_ENV === 'production'} sameSite=lax trustProxy=${app.get('trust proxy')}\n`);
+  console.log(`  Auth cookies       : secure=${process.env.NODE_ENV === 'production'} sameSite=lax trustProxy=${app.get('trust proxy')}`);
+  if (templatesCheck.ok) {
+    console.log(`  Raw templates      : ${templatesCheck.count} files at ${templatesCheck.path}`);
+  } else {
+    console.log(`  Raw templates      : MISSING (${templatesCheck.reason}) at ${templatesCheck.path}`);
+    console.log(`                     Campaigns will fail with "0 sites generated".`);
+    console.log(`                     Fix: git add public/templates-raw/*.html && git commit && git push.`);
+  }
+  console.log('');
 });
