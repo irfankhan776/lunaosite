@@ -222,8 +222,10 @@ export async function runPipeline({
     }
 
     emit('sms:sending', { index: result.index, name: result.name, to: dest });
+    console.log(`[pipeline] sms:sending #${result.index} "${result.name}" to=${dest} from=${telnyx.from} telnyx.live=${telnyx.live}`);
     try {
       const sms = await sendSms({ to: result.phone, text });
+      console.log(`[pipeline] sms:result #${result.index} status=${sms.status} simulated=${sms.simulated} telnyxId=${sms.id || 'null'}${sms.error ? ' error=' + sms.error : ''}${sms.errorCode ? ' code=' + sms.errorCode : ''}`);
       result.smsStatus = sms.status;
       result.smsSimulated = sms.simulated;
       result.smsText = text;
