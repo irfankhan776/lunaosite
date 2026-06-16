@@ -23,7 +23,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PORT, SITES_DIR, ROOT_DIR, modeSummary, siteBaseUrl, telnyx, PUBLIC_API_BASE_URL } from './lib/config.js';
+import { PORT, SITES_DIR, ROOT_DIR, modeSummary, siteBaseUrl, telnyx, cloudflare, PUBLIC_API_BASE_URL } from './lib/config.js';
 import { compileSite } from './lib/compile.js';
 import { parseCsv, validateCsv } from './lib/csv.js';
 import { runPipeline, COST_PER_LEAD } from './lib/pipeline.js';
