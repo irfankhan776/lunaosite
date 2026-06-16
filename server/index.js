@@ -86,6 +86,9 @@ import {
 import { googleOAuth } from './lib/config.js';
 
 const app = express();
+// Trust the first proxy hop (Railway / Cloudflare) so `req.secure`,
+// `req.protocol`, and `req.ip` reflect the real client HTTPS.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '5mb' }));
 app.use(express.text({ type: 'text/csv', limit: '5mb' }));
 app.use(cookieParser());
@@ -431,7 +434,7 @@ app.post('/api/auth/register', async (req, res) => {
     const passwordHash = await hashPassword(password);
     const user = createUser({ email, name: name || '', passwordHash });
     const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(res, token);
+    setSessionCookie(req, res, token);
 
     res.status(201).json({ ok: true, user: publicUser(user) });
   } catch (err) {
@@ -459,7 +462,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(res, token);
+    setSessionCookie(req, res, token);
 
     res.json({ ok: true, user: publicUser(user) });
   } catch (err) {
@@ -510,7 +513,7 @@ app.post('/api/auth/google', async (req, res) => {
     }
 
     const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(res, token);
+    setSessionCookie(req, res, token);
 
     res.json({ ok: true, user: publicUser(user) });
   } catch (err) {
@@ -521,7 +524,7 @@ app.post('/api/auth/google', async (req, res) => {
 
 // Logout: clear the session cookie.
 app.post('/api/auth/logout', (req, res) => {
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   res.json({ ok: true });
 });
 
@@ -533,15 +536,46 @@ app.get('/api/auth/me', async (req, res) => {
   }
   const payload = await verifySessionToken(token);
   if (!payload) {
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
   }
   const user = findUserById(Number(payload.sub));
   if (!user) {
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     return res.status(401).json({ ok: false, error: 'User not found.' });
   }
   res.json({ ok: true, user: publicUser(user) });
+});
+
+// Diagnostic: confirm cookies are flowing in both directions. No secrets, no
+// token values — just booleans + config flags. Safe to leave in for now.
+app.get('/api/_diag/cookies', (req, res) => {
+  const hasInbound = Boolean(req.headers.cookie);
+  const hasSession = Boolean(parseSessionCookie(req));
+  let hasOutbound = false;
+  res.cookie('lunao_diag', '1', {
+    httpOnly: true,
+    secure: req.secure,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 60_000,
+  });
+  // Read back the header Express is about to send. express sets a single
+  // Set-Cookie header per res.cookie() call.
+  hasOutbound = Boolean(res.getHeaders()['set-cookie']);
+  res.json({
+    ok: true,
+    inboundCookieHeader: hasInbound,
+    inboundSessionCookie: hasSession,
+    outboundSetCookie: hasOutbound,
+    reqProtocol: req.protocol,
+    reqSecure: req.secure,
+    nodeEnv: process.env.NODE_ENV,
+    trustProxy: app.get('trust proxy'),
+    xForwardedProto: req.headers['x-forwarded-proto'] || null,
+    xForwardedFor: req.headers['x-forwarded-for'] || null,
+    host: req.headers.host,
+  });
 });
 
 // Middleware: require an authenticated session. Attaches `req.userId` for use
@@ -559,7 +593,7 @@ async function authenticate(req, res, next) {
   }
   const payload = await verifySessionToken(token);
   if (!payload) {
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
   }
   req.userId = Number(payload.sub);
@@ -1089,5 +1123,6 @@ app.listen(PORT, () => {
   console.log(`  AI Editor          : ${mode.aiEditor}`);
   console.log(`  Chatbot            : ${mode.chatbot}`);
   console.log(`  Site base URL      : ${mode.siteBaseUrl}`);
-  console.log(`  DB                 : ${process.env.DATABASE_URL ? 'Postgres (Railway)' : 'SQLite (local)'}\n`);
+  console.log(`  DB                 : ${process.env.DATABASE_URL ? 'Postgres (Railway)' : 'SQLite (local)'}`);
+  console.log(`  Auth cookies       : secure=${process.env.NODE_ENV === 'production'} sameSite=lax trustProxy=${app.get('trust proxy')}\n`);
 });

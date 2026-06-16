@@ -32,20 +32,26 @@ export async function verifyPassword(password, hash) {
   return bcrypt.compare(password, hash);
 }
 
-export function setSessionCookie(res, token) {
+export function setSessionCookie(req, res, token) {
+  // When running behind a proxy (Railway, Cloudflare, etc.) `req.secure` will
+  // only be true if `app.set('trust proxy', 1)` is enabled. Without that, the
+  // browser sees a `Secure` cookie over HTTPS but the server thinks the
+  // request was plain HTTP, which can cause cookie-flag mismatches.
+  const isSecure = req.secure || auth.cookieSecure;
   res.cookie(auth.cookieName, token, {
     httpOnly: true,
-    secure: auth.cookieSecure,
+    secure: isSecure,
     sameSite: auth.cookieSameSite,
     maxAge: auth.cookieMaxAge,
     path: '/',
   });
 }
 
-export function clearSessionCookie(res) {
+export function clearSessionCookie(req, res) {
+  const isSecure = req.secure || auth.cookieSecure;
   res.clearCookie(auth.cookieName, {
     httpOnly: true,
-    secure: auth.cookieSecure,
+    secure: isSecure,
     sameSite: auth.cookieSameSite,
     path: '/',
   });
