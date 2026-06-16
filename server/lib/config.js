@@ -75,6 +75,23 @@ export const gemini = {
   },
 };
 
+export const auth = {
+  jwtSecret: env.JWT_SECRET || env.SESSION_SECRET || 'change-me-in-production-use-a-long-random-string',
+  jwtExpiresIn: '7d',
+  cookieName: 'lunao_session',
+  cookieMaxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+  cookieSecure: env.NODE_ENV === 'production',
+  cookieSameSite: 'lax',
+};
+
+export const googleOAuth = {
+  clientId: env.GOOGLE_CLIENT_ID || '',
+  clientSecret: env.GOOGLE_CLIENT_SECRET || '',
+  get enabled() {
+    return Boolean(this.clientId && this.clientSecret);
+  },
+};
+
 // Public base URL the injected widget calls for bookings/chat. Locally this is
 // the dev API; later point it at the deployed Railway API via PUBLIC_API_BASE_URL.
 export const PUBLIC_API_BASE_URL = (env.PUBLIC_API_BASE_URL || `http://localhost:${PORT}`).replace(/\/+$/, '');

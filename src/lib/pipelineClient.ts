@@ -635,3 +635,56 @@ export async function streamAiEdit(
 
   return finalHtml || acc;
 }
+
+// ---------------------------------------------------------------------------
+// Auth API (cookie-based, cross-device)
+// ---------------------------------------------------------------------------
+
+export const auth = {
+  COOKIE_NAME: 'lunao_session',
+
+  async register(email: string, password: string, name?: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password, name }),
+    });
+    return res.json();
+  },
+
+  async login(email: string, password: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password }),
+    });
+    return res.json();
+  },
+
+  async google(googleToken: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/auth/google`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ googleToken }),
+    });
+    return res.json();
+  },
+
+  async logout(): Promise<void> {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+  },
+
+  async me(): Promise<any> {
+    const res = await fetch(`${API_BASE}/api/auth/me`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    return res.json();
+  },
+};

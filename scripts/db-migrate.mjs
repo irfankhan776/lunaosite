@@ -36,6 +36,8 @@ const pool = new Pool({
 });
 
 const TABLES = [
+  'users',
+  'auth_tokens',
   'bookings',
   'chat_sessions',
   'chat_messages',

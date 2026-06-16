@@ -14,11 +14,8 @@ import { FAQ } from './landing/sections/FAQ';
 import { Footer } from './landing/sections/Footer';
 import { AuthModal } from './landing/components/AuthModal';
 import { SectionDivider } from './landing/components/SectionDivider';
+import { useAuth } from './contexts/AuthContext';
 import './landing/index.css';
-
-interface LandingProps {
-  onAuthed: (ownerKey: string) => void;
-}
 
 const PLAN_ID_TO_LABEL: Record<string, string> = {
   free: 'Free Plan',
@@ -28,7 +25,11 @@ const PLAN_ID_TO_LABEL: Record<string, string> = {
   agency: 'Agency Plan',
 };
 
-export const Landing: React.FC<LandingProps> = ({ onAuthed }) => {
+// Google Client ID — set VITE_GOOGLE_CLIENT_ID in your .env file.
+// If not set, the Google button is hidden and only email/password auth is available.
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+
+export const Landing: React.FC = () => {
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('signup');
   const [pendingPlan, setPendingPlan] = useState<string | undefined>(undefined);
@@ -83,11 +84,6 @@ export const Landing: React.FC<LandingProps> = ({ onAuthed }) => {
   }, []);
 
   const closeAuth = useCallback(() => setAuthOpen(false), []);
-
-  const handleAuthed = useCallback((ownerKey: string) => {
-    setAuthOpen(false);
-    onAuthed(ownerKey);
-  }, [onAuthed]);
 
   const handlePickPlan = useCallback((planId: string) => {
     openAuth('signup', { plan: PLAN_ID_TO_LABEL[planId] ?? 'Free Plan' });
@@ -144,7 +140,8 @@ export const Landing: React.FC<LandingProps> = ({ onAuthed }) => {
         initialPlan={pendingPlan}
         initialNiche={pendingNiche}
         onClose={closeAuth}
-        onAuthed={handleAuthed}
+        onAuthed={() => setAuthOpen(false)}
+        googleClientId={GOOGLE_CLIENT_ID}
       />
     </div>
   );

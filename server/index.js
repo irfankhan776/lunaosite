@@ -12,8 +12,15 @@
 //   POST /api/sites/:slug/deploy                  -> publish to Cloudflare
 //   GET  /sites/<slug>/                           -> locally hosted compiled sites
 //
+//   POST /api/auth/register                       -> email + password signup
+//   POST /api/auth/login                          -> email + password login
+//   POST /api/auth/google                         -> Google OAuth token exchange
+//   POST /api/auth/logout                         -> clear session cookie
+//   GET  /api/auth/me                             -> current user from cookie
+//
 // In production it also serves the built frontend from /dist.
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PORT, SITES_DIR, ROOT_DIR, modeSummary, siteBaseUrl, telnyx, PUBLIC_API_BASE_URL } from './lib/config.js';
@@ -61,10 +68,27 @@ import {
   markCampaignFailed,
 } from './lib/campaigns.js';
 import { sendSms, toE164, countSegments } from './lib/telnyx.js';
+import {
+  makeSessionToken,
+  verifySessionToken,
+  hashPassword,
+  verifyPassword,
+  setSessionCookie,
+  clearSessionCookie,
+  parseSessionCookie,
+  createUser,
+  findUserByEmail,
+  findUserByGoogleId,
+  findUserById,
+  updateUserGoogleId,
+  publicUser,
+} from './lib/auth.js';
+import { googleOAuth } from './lib/config.js';
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 app.use(express.text({ type: 'text/csv', limit: '5mb' }));
+app.use(cookieParser());
 
 // Permissive CORS so the Vite dev server (port 3000) can call the API.
 app.use((req, res, next) => {
@@ -124,9 +148,18 @@ app.post('/api/campaign/run', async (req, res) => {
     niche,
     smsTemplate,
     name,
-    ownerKey,
     plan,
   } = req.body || {};
+
+  // Resolve user identity: prefer cookie session, fall back to legacy ownerKey
+  let ownerKey = req.body?.ownerKey || req.query?.ownerKey || null;
+  if (!ownerKey) {
+    const token = parseSessionCookie(req);
+    if (token) {
+      const payload = await verifySessionToken(token);
+      if (payload) ownerKey = `user_${payload.sub}`;
+    }
+  }
 
   let leads = Array.isArray(businesses) ? businesses : [];
   if (!leads.length && csv) leads = parseCsv(csv);
@@ -373,6 +406,166 @@ app.post('/api/sites/:slug/addons', async (req, res) => {
     res.status(err.status || 500).json({ ok: false, error: err.message });
   }
 });
+
+// ---- User Auth (JWT cookie-based, cross-device) ---------------------------
+
+// Register with email + password.
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, name } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ ok: false, error: 'Email and password are required.' });
+    }
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ ok: false, error: 'Invalid email address.' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters.' });
+    }
+
+    const existing = findUserByEmail(email);
+    if (existing) {
+      return res.status(409).json({ ok: false, error: 'An account with this email already exists.' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const user = createUser({ email, name: name || '', passwordHash });
+    const token = makeSessionToken(user.id, user.email);
+    setSessionCookie(res, token);
+
+    res.status(201).json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    console.error('[/api/auth/register]', err);
+    res.status(500).json({ ok: false, error: 'Registration failed. Please try again.' });
+  }
+});
+
+// Login with email + password.
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ ok: false, error: 'Email and password are required.' });
+    }
+
+    const user = findUserByEmail(email);
+    if (!user || !user.password_hash) {
+      return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
+    }
+
+    const valid = await verifyPassword(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
+    }
+
+    const token = makeSessionToken(user.id, user.email);
+    setSessionCookie(res, token);
+
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    console.error('[/api/auth/login]', err);
+    res.status(500).json({ ok: false, error: 'Login failed. Please try again.' });
+  }
+});
+
+// Exchange a Google ID token for a server session cookie.
+// Body: { googleToken: string }  — the token from the Google Sign-In SDK.
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { googleToken } = req.body || {};
+    if (!googleToken) {
+      return res.status(400).json({ ok: false, error: 'googleToken is required.' });
+    }
+
+    if (!googleOAuth.enabled) {
+      return res.status(503).json({ ok: false, error: 'Google Sign-In is not configured.' });
+    }
+
+    // Verify the token with Google.
+    const googleRes = await fetch('https://oauth2.googleapis.com/tokeninfo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ access_token: googleToken }),
+    });
+
+    if (!googleRes.ok) {
+      return res.status(401).json({ ok: false, error: 'Invalid Google token.' });
+    }
+
+    const payload = await googleRes.json();
+    const { email, name, picture, sub: googleId } = payload;
+
+    let user = findUserByGoogleId(googleId);
+    if (!user) {
+      // First time: create account. If email already exists without google_id, link it.
+      const byEmail = findUserByEmail(email);
+      if (byEmail && !byEmail.google_id) {
+        updateUserGoogleId(byEmail.id, googleId, picture);
+        user = findUserById(byEmail.id);
+      } else if (!byEmail) {
+        user = createUser({ email, name: name || '', googleId, avatarUrl: picture });
+      } else {
+        return res.status(409).json({ ok: false, error: 'An account with this email already exists. Please log in with your password.' });
+      }
+    }
+
+    const token = makeSessionToken(user.id, user.email);
+    setSessionCookie(res, token);
+
+    res.json({ ok: true, user: publicUser(user) });
+  } catch (err) {
+    console.error('[/api/auth/google]', err);
+    res.status(500).json({ ok: false, error: 'Google sign-in failed. Please try again.' });
+  }
+});
+
+// Logout: clear the session cookie.
+app.post('/api/auth/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Get the currently logged-in user from the session cookie.
+app.get('/api/auth/me', async (req, res) => {
+  const token = parseSessionCookie(req);
+  if (!token) {
+    return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+  }
+  const payload = await verifySessionToken(token);
+  if (!payload) {
+    clearSessionCookie(res);
+    return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
+  }
+  const user = findUserById(Number(payload.sub));
+  if (!user) {
+    clearSessionCookie(res);
+    return res.status(401).json({ ok: false, error: 'User not found.' });
+  }
+  res.json({ ok: true, user: publicUser(user) });
+});
+
+// Middleware: require an authenticated session. Attaches `req.userId` for use
+// in downstream handlers. Skips if X-Owner-Key is present (legacy ownerKey path
+// so existing localStorage-based clients still work while migrating).
+async function authenticate(req, res, next) {
+  const legacyKey = req.headers['x-owner-key'] || req.query.ownerKey || req.body?.ownerKey;
+  if (legacyKey) {
+    req.ownerKey = String(legacyKey);
+    return next();
+  }
+  const token = parseSessionCookie(req);
+  if (!token) {
+    return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+  }
+  const payload = await verifySessionToken(token);
+  if (!payload) {
+    clearSessionCookie(res);
+    return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
+  }
+  req.userId = Number(payload.sub);
+  req.userEmail = payload.email;
+  next();
+}
 
 // Serve the locally compiled sites (dry-run live preview).
 app.use('/sites', express.static(SITES_DIR, { extensions: ['html'] }));
@@ -648,9 +841,9 @@ app.get('/api/invite-codes/:code', (req, res) => {
 // key stored in localStorage) as `ownerKey`. In production this will be the
 // authenticated session id or user id from the agency's auth system.
 
-app.get('/api/credits', (req, res) => {
+app.get('/api/credits', authenticate, (req, res) => {
   try {
-    const ownerKey = String(req.query.ownerKey || '').trim();
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     const plan = req.query.plan ? String(req.query.plan) : null;
     const account = plan ? ensureAccount(ownerKey, plan) : getAccount(ownerKey);
@@ -666,9 +859,9 @@ app.get('/api/credits', (req, res) => {
   }
 });
 
-app.post('/api/credits/topup', (req, res) => {
+app.post('/api/credits/topup', authenticate, (req, res) => {
   try {
-    const { ownerKey, plan } = req.body || {};
+    const ownerKey = req.userId ? `user_${req.userId}` : req.body?.ownerKey;
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     if (!PLAN_BALANCE[plan]) return res.status(400).json({ ok: false, error: 'Unknown plan tier' });
     const account = ensureAccount(ownerKey, plan);
@@ -678,9 +871,9 @@ app.post('/api/credits/topup', (req, res) => {
   }
 });
 
-app.get('/api/credits/ledger', (req, res) => {
+app.get('/api/credits/ledger', authenticate, (req, res) => {
   try {
-    const ownerKey = String(req.query.ownerKey || '').trim();
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     const limit = parseInt(req.query.limit, 10) || 50;
     res.json({ ok: true, ledger: listLedger(ownerKey, limit) });
@@ -691,9 +884,9 @@ app.get('/api/credits/ledger', (req, res) => {
 
 // ---- Campaign history + per-campaign detail ------------------------------
 
-app.get('/api/campaigns', (req, res) => {
+app.get('/api/campaigns', authenticate, (req, res) => {
   try {
-    const ownerKey = String(req.query.ownerKey || '').trim();
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     const limit = parseInt(req.query.limit, 10) || 50;
     res.json({ ok: true, campaigns: listCampaigns(ownerKey, { limit }) });
@@ -702,7 +895,7 @@ app.get('/api/campaigns', (req, res) => {
   }
 });
 
-app.get('/api/campaigns/:id', (req, res) => {
+app.get('/api/campaigns/:id', authenticate, (req, res) => {
   try {
     const c = getCampaign(req.params.id);
     if (!c) return res.status(404).json({ ok: false, error: 'Campaign not found' });
@@ -717,7 +910,7 @@ app.get('/api/campaigns/:id', (req, res) => {
 // Refund any remaining SMS charges for a campaign (manual admin tool).
 // Idempotent: refunds are recorded in the ledger with (reason, ref_type, ref_id)
 // and we no-op on repeat calls.
-app.post('/api/campaigns/:id/refund', (req, res) => {
+app.post('/api/campaigns/:id/refund', authenticate, (req, res) => {
   try {
     const c = getCampaign(req.params.id);
     if (!c) return res.status(404).json({ ok: false, error: 'Campaign not found' });
@@ -742,9 +935,10 @@ app.post('/api/campaigns/:id/refund', (req, res) => {
 
 // ---- Test SMS (Settings "Send test message" button) ----------------------
 
-app.post('/api/test-sms', async (req, res) => {
+app.post('/api/test-sms', authenticate, async (req, res) => {
   try {
-    const { to, text, ownerKey } = req.body || {};
+    const ownerKey = req.userId ? `user_${req.userId}` : req.body?.ownerKey;
+    const { to, text } = req.body || {};
     const dest = toE164(to);
     if (!dest) return res.status(400).json({ ok: false, error: 'Invalid destination phone' });
     if (!telnyx.enabled) {
@@ -866,9 +1060,9 @@ app.get('/api/sms/status', (_req, res) => {
 });
 
 // ---- Owner SMS log (per-owner aggregated view) ---------------------------
-app.get('/api/owner/sms', (req, res) => {
+app.get('/api/owner/sms', authenticate, (req, res) => {
   try {
-    const ownerKey = String(req.query.ownerKey || '').trim();
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     const limit = parseInt(req.query.limit, 10) || 100;
     res.json({ ok: true, sms: listSmsForOwner(ownerKey, limit) });

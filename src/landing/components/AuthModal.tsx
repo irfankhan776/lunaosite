@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Mail, ArrowRight } from 'lucide-react';
+import { X, Mail, ArrowRight, Chrome } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface AuthModalProps {
   open: boolean;
@@ -7,23 +8,11 @@ interface AuthModalProps {
   initialPlan?: string;
   initialNiche?: string;
   onClose: () => void;
-  onAuthed: (ownerKey: string) => void;
+  onAuthed: () => void;
+  googleClientId?: string;
 }
 
 const PLAN_FROM_STORAGE_KEY = 'lunao_user_plan';
-
-// Generate a stable, human-friendly owner key. Not cryptographically secure —
-// this is a UX-level gate, not a security boundary. The real backend auth is
-// deferred per the plan.
-const makeOwnerKey = (email: string): string => {
-  const slug = email
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32) || 'user';
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `dash-${slug}-${rand}`;
-};
 
 const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
 
@@ -34,21 +23,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   initialNiche,
   onClose,
   onAuthed,
+  googleClientId,
 }) => {
+  const { login, register, loginWithGoogle, loading, error: authError } = useAuth();
   const [mode, setMode] = useState<'signup' | 'login'>(initialMode);
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   const triggerRef = useRef<Element | null>(null);
+  const googleBtnRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (open) {
       setMode(initialMode);
       setError(null);
-      // Focus the input shortly after the modal mounts.
+      setPassword('');
       setTimeout(() => emailInputRef.current?.focus(), 80);
-      // Remember the trigger so we can restore focus on close.
       triggerRef.current = document.activeElement;
     }
   }, [open, initialMode]);
@@ -68,40 +60,107 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prevOverflow;
-      // Restore focus to the element that opened the modal.
       if (triggerRef.current && (triggerRef.current as HTMLElement).focus) {
         (triggerRef.current as HTMLElement).focus();
       }
     };
   }, [open]);
 
-  if (!open) return null;
+  // Initialize Google Identity Services when the modal opens and a client ID is available.
+  useEffect(() => {
+    if (!open || !googleClientId) return;
+    const scriptId = 'gis-script';
+    if (document.getElementById(scriptId)) return;
 
-  const handleSubmit = (e: React.FormEvent) => {
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+  }, [open, googleClientId]);
+
+  // Render the Google button once GIS is loaded.
+  useEffect(() => {
+    if (!open || !googleClientId || !googleBtnRef.current) return;
+    const container = googleBtnRef.current;
+    container.innerHTML = '';
+
+    const win = window as any;
+    if (!win.google?.accounts?.identity) {
+      const check = setInterval(() => {
+        if (win.google?.accounts?.identity) {
+          clearInterval(check);
+          renderGoogleButton();
+        }
+      }, 200);
+      return () => clearInterval(check);
+    }
+    renderGoogleButton();
+
+    function renderGoogleButton() {
+      win.google.accounts.identity.renderButton(container, {
+        theme: 'outline',
+        size: 'large',
+        text: mode === 'signup' ? 'signin_with' : 'signin_with',
+        shape: 'rectangular',
+        width: parseInt(getComputedStyle(container).width) || 380,
+      });
+      container.querySelector('[role="button"]')?.addEventListener('click', handleGoogleClick);
+    }
+  }, [open, googleClientId, mode]);
+
+  const handleGoogleClick = async () => {
+    const win = window as any;
+    if (!win.google?.accounts?.identity) return;
+
+    win.google.accounts.identity.requestCredential({
+      client_id: googleClientId,
+      callback: async (response: any) => {
+        if (!response?.credential) return;
+        try {
+          setSubmitting(true);
+          setError(null);
+          await loginWithGoogle(response.credential);
+          onAuthed();
+        } catch (err: any) {
+          setError(err.message || 'Google sign-in failed. Please try again.');
+        } finally {
+          setSubmitting(false);
+        }
+      },
+    });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!isValidEmail(email)) {
       setError('Enter a valid email address.');
       return;
     }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
     setSubmitting(true);
     try {
-      const ownerKey = makeOwnerKey(email);
-      localStorage.setItem('lunao_owner_key', ownerKey);
-      localStorage.setItem('lunao_user_email', email.trim().toLowerCase());
-      if (initialPlan) {
-        localStorage.setItem(PLAN_FROM_STORAGE_KEY, initialPlan);
+      if (mode === 'signup') {
+        await register(email, password);
+      } else {
+        await login(email, password);
       }
-      if (initialNiche) {
-        localStorage.setItem('lunao_pending_niche', initialNiche);
-      }
-      onAuthed(ownerKey);
-    } catch (err) {
-      setError('Could not save your account. Check that local storage is enabled and try again.');
+      if (initialPlan) localStorage.setItem(PLAN_FROM_STORAGE_KEY, initialPlan);
+      if (initialNiche) localStorage.setItem('lunao_pending_niche', initialNiche);
+      onAuthed();
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong. Please try again.');
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (!open) return null;
 
   return (
     <div
@@ -137,8 +196,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <p className="font-sans text-sm text-ink-secondary leading-relaxed mb-6">
             {mode === 'signup'
               ? 'No card. Cancel any time. Your first campaign can go out in under a minute.'
-              : 'Enter the email you used when you signed up. We will restore your account in place.'}
+              : 'Enter the email and password you used when you signed up.'}
           </p>
+
+          {/* Google Sign-In */}
+          {googleClientId && (
+            <>
+              <div
+                ref={googleBtnRef}
+                className="mb-4 flex items-center justify-center cursor-pointer"
+              />
+              <div className="relative mb-4">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border-main" />
+                </div>
+                <div className="relative flex justify-center text-[10px]">
+                  <span className="bg-white px-3 text-ink-tertiary font-mono uppercase tracking-widest">or</span>
+                </div>
+              </div>
+            </>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <label className="block">
@@ -161,22 +238,41 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </label>
 
-            {error && (
+            <label className="block">
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-tertiary block mb-1.5">
+                Password
+              </span>
+              <div className="relative">
+                <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary" strokeWidth={1.8} />
+                <input
+                  type="password"
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
+                  className="w-full h-11 pl-10 pr-3 rounded-md bg-off-white border border-border-main text-ink text-sm font-sans placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:bg-white transition-colors"
+                />
+              </div>
+            </label>
+
+            {(error || authError) && (
               <p role="alert" className="text-xs font-sans text-danger">
-                {error}
+                {error || authError}
               </p>
             )}
 
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || loading}
               className="mt-1 h-11 w-full rounded-md bg-accent text-white font-sans text-sm font-medium hover:bg-accent-hover disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
-              {submitting
-                ? 'Opening your dashboard…'
+              {submitting || loading
+                ? 'Please wait…'
                 : mode === 'signup'
-                ? 'Continue to dashboard'
-                : 'Open dashboard'}
+                ? 'Create account'
+                : 'Log in'}
               <ArrowRight className="w-4 h-4" strokeWidth={2} />
             </button>
           </form>
@@ -187,7 +283,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 Already have an account?{' '}
                 <button
                   type="button"
-                  onClick={() => { setMode('login'); setError(null); }}
+                  onClick={() => { setMode('login'); setError(null); setPassword(''); }}
                   className="text-accent hover:text-accent-hover font-medium"
                 >
                   Log in
@@ -198,7 +294,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 New here?{' '}
                 <button
                   type="button"
-                  onClick={() => { setMode('signup'); setError(null); }}
+                  onClick={() => { setMode('signup'); setError(null); setPassword(''); }}
                   className="text-accent hover:text-accent-hover font-medium"
                 >
                   Create an account
@@ -209,7 +305,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         <div className="border-t border-border-light bg-off-white px-6 sm:px-8 py-3 text-[11px] font-mono text-ink-tertiary flex items-center justify-between">
-          <span>Local-only account</span>
+          <span>{googleClientId ? 'Secure cookie session' : 'Account'}</span>
           <span>v1.0</span>
         </div>
       </div>
