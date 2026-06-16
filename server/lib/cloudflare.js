@@ -41,6 +41,54 @@ function runWrangler(args, env) {
   });
 }
 
+// Pre-flight: validate the Cloudflare API token by hitting /accounts. This
+// catches the #1 cause of wrangler deploy failures (invalid token, missing
+// permissions) BEFORE wrangler runs, with a clear actionable error message
+// instead of a wall of wrangler stderr.
+export async function validateCloudflareToken() {
+  if (!cloudflare.live) {
+    return { ok: false, reason: 'cloudflare.live is false (missing token, accountId, or project)' };
+  }
+  try {
+    const res = await fetch('https://api.cloudflare.com/client/v4/accounts', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${cloudflare.apiToken}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      const firstError = data?.errors?.[0];
+      const code = firstError?.code;
+      const message = firstError?.message || `HTTP ${res.status}`;
+      return {
+        ok: false,
+        code,
+        reason: `Cloudflare rejected the API token: ${message}${code ? ` [code: ${code}]` : ''}`,
+        fix: code === 9109 || code === 10000
+          ? 'The CLOUDFLARE_API_TOKEN in Railway Variables is invalid, expired, or was copy-pasted with extra whitespace. Create a new token at https://dash.cloudflare.com/profile/api-tokens with "Cloudflare Pages: Edit" permission and paste the new value into Railway.'
+          : 'Verify the CLOUDFLARE_API_TOKEN in Railway Variables has "Cloudflare Pages: Edit" permission.',
+      };
+    }
+    // Also verify the project exists and the token can see it.
+    const projRes = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${cloudflare.accountId}/pages/projects/${cloudflare.project}`,
+      { method: 'GET', headers: { Authorization: `Bearer ${cloudflare.apiToken}` } },
+    );
+    const projData = await projRes.json().catch(() => ({}));
+    if (!projRes.ok || !projData.success) {
+      const firstError = projData?.errors?.[0];
+      const message = firstError?.message || `HTTP ${projRes.status}`;
+      return {
+        ok: false,
+        reason: `Cloudflare Pages project "${cloudflare.project}" not found in account ${cloudflare.accountId}: ${message}`,
+        fix: `Either create a Pages project named "${cloudflare.project}" at https://dash.cloudflare.com/?to=/:account/pages/new, or change CLOUDFLARE_PAGES_PROJECT to an existing project name.`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: `Network error contacting Cloudflare: ${err.message}` };
+  }
+}
+
 // Deploy the accumulated sites directory to Cloudflare Pages (production branch).
 // Called once per campaign batch after all sites are written to disk.
 export async function publishBatch() {

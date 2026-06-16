@@ -143,6 +143,26 @@ export async function runPipeline({
   const staged = results.filter((r) => r.siteStatus === 'generated');
   if (staged.length) {
     emit('deploy:start', { count: staged.length, live: cloudflare.live });
+    // Pre-flight: validate the Cloudflare token + project before invoking
+    // wrangler. This gives the user a clear, actionable error in seconds
+    // (with the fix steps) instead of waiting 30s for wrangler to fail
+    // with a wall of cryptic stderr.
+    if (cloudflare.live) {
+      try {
+        const tokenCheck = await validateCloudflareToken();
+        if (!tokenCheck.ok) {
+          console.error(`[pipeline] cloudflare pre-flight failed: ${tokenCheck.reason}`);
+          if (tokenCheck.fix) console.error(`[pipeline] fix: ${tokenCheck.fix}`);
+          emit('deploy:error', { error: tokenCheck.reason, fix: tokenCheck.fix || null });
+          // Continue to wrangler anyway — it may have more context. But
+          // the user will see the clear error message first.
+        } else {
+          console.log(`[pipeline] cloudflare pre-flight ok: token valid, project "${cloudflare.project}" accessible`);
+        }
+      } catch (e) {
+        // Pre-flight network error: continue to wrangler.
+      }
+    }
     try {
       const publish = await publishBatch();
       emit('deploy:done', { ...publish, count: staged.length });

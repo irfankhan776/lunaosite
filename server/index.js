@@ -28,7 +28,7 @@ import { compileSite } from './lib/compile.js';
 import { parseCsv, validateCsv } from './lib/csv.js';
 import { runPipeline, COST_PER_LEAD } from './lib/pipeline.js';
 import { listSites, readSite, writeSite, siteExists, isValidSlug, titleFromHtml, nicheFromHtml } from './lib/sites.js';
-import { publishBatch } from './lib/cloudflare.js';
+import { publishBatch, validateCloudflareToken } from './lib/cloudflare.js';
 import { streamEdit, isAiEnabled, cleanHtmlOutput } from './lib/anthropic.js';
 import { createBooking, listBookings, updateBookingStatus } from './lib/bookings.js';
 import { chatTurn } from './lib/chatbot.js';
@@ -104,17 +104,56 @@ app.use((req, res, next) => {
 
 fs.mkdirSync(SITES_DIR, { recursive: true });
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
   const health = {
     ok: true,
     mode: modeSummary(),
     templates: templatesCheck,
+    cloudflare: { ok: cloudflare.live, token: null, project: null },
+    telnyx: { ok: telnyx.live, apiKey: Boolean(telnyx.apiKey), from: Boolean(telnyx.from) },
   };
-  // If templates are missing, the server is technically "up" but every campaign
-  // will silently fail. Surface that as !ok so the dashboard can warn the user.
   if (!templatesCheck.ok) {
     health.ok = false;
     health.error = `Raw templates missing: ${templatesCheck.reason} at ${templatesCheck.path}. Campaigns will fail.`;
+  }
+  // Validate the Cloudflare token + project so the user can verify their config
+  // in one GET request, without running a full campaign. This catches the
+  // "Invalid access token [code: 9109]" failure mode that produces a blank
+  // .pages.dev URL with no clear error.
+  if (cloudflare.live) {
+    try {
+      const tokenCheck = await validateCloudflareToken();
+      health.cloudflare.token = tokenCheck;
+      health.cloudflare.project = cloudflare.project;
+      if (!tokenCheck.ok) {
+        health.ok = false;
+        health.error = `Cloudflare: ${tokenCheck.reason}`;
+        if (tokenCheck.fix) health.cloudflare.fix = tokenCheck.fix;
+      }
+    } catch (err) {
+      health.cloudflare.token = { ok: false, reason: err.message };
+    }
+  }
+  // Quick Telnyx token validity check (no side effects).
+  if (telnyx.live) {
+    try {
+      const res2 = await fetch('https://api.telnyx.com/v2/messaging_phone_numbers?page[size]=1', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${telnyx.apiKey}` },
+      });
+      health.telnyx.apiValid = res2.ok;
+      if (!res2.ok) {
+        const data = await res2.json().catch(() => ({}));
+        const firstError = data?.errors?.[0];
+        health.telnyx.error = firstError?.detail || `HTTP ${res2.status}`;
+        // Don't fail the overall health check — the API key might still be
+        // valid for sending, just not for this read endpoint. The real test
+        // is the next campaign.
+      }
+    } catch (err) {
+      health.telnyx.apiValid = false;
+      health.telnyx.error = err.message;
+    }
   }
   res.json(health);
 });
