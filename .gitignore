@@ -15,6 +15,8 @@ server/.sites/
 server/.data/
 
 # Temp/debug files
-*.html
 temp*.js
 debug*.js
+
+# Vite entry point (unignored so Railway can build)
+!index.html
