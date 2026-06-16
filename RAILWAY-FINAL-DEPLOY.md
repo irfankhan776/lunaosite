@@ -53,8 +53,8 @@ DATA_DIR=/data
 
 # ===== SITE BASE URL =====
 # IMPORTANT: Update this AFTER you generate the Railway domain (Step 5)
-SITE_BASE_URL=https://YOUR-RAILWAY-DOMAIN.up.railway.app
-PUBLIC_API_BASE_URL=https://YOUR-RAILWAY-DOMAIN.up.railway.app
+SITE_BASE_URL=https://web-production-2eec.up.railway.app
+PUBLIC_API_BASE_URL=https://web-production-2eec.up.railway.app
 
 # ===== TELNYX SMS (YOUR LIVE KEYS) =====
 SMS_ENABLED=true
