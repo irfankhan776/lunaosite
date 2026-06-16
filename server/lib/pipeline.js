@@ -147,6 +147,10 @@ export async function runPipeline({
       const publish = await publishBatch();
       emit('deploy:done', { ...publish, count: staged.length });
     } catch (err) {
+      // Log loudly: a deploy error is the #1 cause of "blank site" reports.
+      // The site HTML was written locally, but Cloudflare never received it.
+      console.error(`[pipeline] deploy:error -> ${err.message}`);
+      if (err.stack) console.error(err.stack);
       emit('deploy:error', { error: err.message });
       // Sites are still staged locally; mark but continue (SMS may be skipped).
     }

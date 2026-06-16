@@ -47,6 +47,21 @@ export async function publishBatch() {
   if (!cloudflare.live) {
     return { mode: 'dry-run', deployed: false };
   }
+  // Verify the sites directory exists and has content before invoking wrangler.
+  // If SITES_DIR is empty, wrangler will happily "succeed" by deploying nothing
+  // and the user will see a blank Cloudflare URL with no error.
+  let stagedFiles = 0;
+  try {
+    const entries = await fs.readdir(SITES_DIR, { withFileTypes: true });
+    stagedFiles = entries.filter((e) => e.isDirectory()).length;
+  } catch (e) {
+    console.error(`[cloudflare] SITES_DIR does not exist: ${SITES_DIR}`);
+    throw new Error(`Sites directory missing: ${SITES_DIR}`);
+  }
+  if (stagedFiles === 0) {
+    throw new Error(`No sites staged at ${SITES_DIR} — nothing to deploy`);
+  }
+  console.log(`[cloudflare] deploying ${stagedFiles} site(s) from ${SITES_DIR} to project=${cloudflare.project} branch=${cloudflare.branch}`);
   const { code, stdout, stderr } = await runWrangler(
     [
       'pages',
@@ -61,11 +76,16 @@ export async function publishBatch() {
       CLOUDFLARE_ACCOUNT_ID: cloudflare.accountId,
     },
   );
+  // Log full wrangler output so deploy issues are visible in Railway logs.
+  if (stdout) console.log(`[cloudflare] wrangler stdout:\n${stdout}`);
+  if (stderr) console.error(`[cloudflare] wrangler stderr:\n${stderr}`);
   if (code !== 0) {
-    throw new Error(`Cloudflare Pages deploy failed: ${stderr || stdout}`);
+    throw new Error(`Cloudflare Pages deploy failed (exit ${code}): ${stderr || stdout}`);
   }
   const urlMatch = (stdout + stderr).match(/https:\/\/[^\s]+\.pages\.dev[^\s]*/);
-  return { mode: 'live', deployed: true, deploymentUrl: urlMatch ? urlMatch[0] : null };
+  const deploymentUrl = urlMatch ? urlMatch[0] : null;
+  console.log(`[cloudflare] deploy ok: ${stagedFiles} site(s) -> ${deploymentUrl || cloudflare.project + '.pages.dev'}`);
+  return { mode: 'live', deployed: true, deploymentUrl, stagedCount: stagedFiles };
 }
 
 // Compile output -> on-disk site. Returns the public URL for this slug.

@@ -31,6 +31,14 @@ export interface SmsHistoryEntry {
   text: string;
   timestamp: string;
   type: 'outgoing' | 'incoming';
+  // Real delivery state of an outgoing message. Drives the tick icon in the
+  // Messages tab: 'pending' = no tick, 'sent' = single tick (sent to Telnyx),
+  // 'delivered' = double tick (confirmed by Telnyx delivery report/webhook),
+  // 'simulated' = no real SMS, 'failed' = red error icon.
+  deliveryStatus?: 'pending' | 'sent' | 'delivered' | 'simulated' | 'failed';
+  // The Telnyx message id, present for real sends so we can poll the delivery
+  // status. Null for simulated.
+  telnyxId?: string | null;
 }
 
 export interface Business {

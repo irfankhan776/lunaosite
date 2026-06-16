@@ -838,21 +838,43 @@ export const Campaigns: React.FC<CampaignsProps> = ({
       ),
     );
 
-    const newBusinesses: Business[] = ok.map((r) => ({
-      id: 'csv-' + r.slug + '-' + Math.random().toString(36).slice(2, 5),
-      name: r.name,
-      owner: '',
-      phone: r.phone || '',
-      city: r.city || '',
-      niche: selectedNiche,
-      webStatus: 'No website' as const,
-      siteStatus: smsComingSoon ? ('Site generated' as const) : ('SMS sent' as const),
-      slug: r.slug,
-      siteUrl: r.siteUrl || '',
-      smsHistory: r.smsText
-        ? [{ text: r.smsText, timestamp: smsComingSoon ? 'Queued (Coming Soon)' : 'Just now', type: 'outgoing' as const }]
-        : [],
-    }));
+    const newBusinesses: Business[] = ok.map((r) => {
+      // Map the pipeline's smsStatus into the tick-driven deliveryStatus the
+      // UI uses. Critical: simulated and sent both show a single tick, only
+      // 'delivered' (confirmed by Telnyx) shows the double tick.
+      let deliveryStatus: 'pending' | 'sent' | 'delivered' | 'simulated' | 'failed' = 'pending';
+      if (smsComingSoon) {
+        deliveryStatus = 'simulated';
+      } else if (r.smsStatus === 'delivered') {
+        deliveryStatus = 'delivered';
+      } else if (r.smsStatus === 'sent') {
+        deliveryStatus = 'sent';
+      } else if (r.smsStatus === 'failed') {
+        deliveryStatus = 'failed';
+      } else if (r.smsSimulated) {
+        deliveryStatus = 'simulated';
+      }
+      return {
+        id: 'csv-' + r.slug + '-' + Math.random().toString(36).slice(2, 5),
+        name: r.name,
+        owner: '',
+        phone: r.phone || '',
+        city: r.city || '',
+        niche: selectedNiche,
+        webStatus: 'No website' as const,
+        siteStatus: smsComingSoon ? ('Site generated' as const) : ('SMS sent' as const),
+        slug: r.slug,
+        siteUrl: r.siteUrl || '',
+        smsHistory: r.smsText
+          ? [{
+              text: r.smsText,
+              timestamp: smsComingSoon ? 'Queued (Coming Soon)' : 'Just now',
+              type: 'outgoing' as const,
+              deliveryStatus,
+            }]
+          : [],
+      };
+    });
     setBusinesses((prev) => [...newBusinesses, ...prev]);
 
     addSmsLog(

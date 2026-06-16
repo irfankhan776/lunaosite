@@ -174,28 +174,91 @@ export const Messages: React.FC<MessagesProps> = ({
     }, 2500);
   };
 
+  // Render the correct delivery tick icon for an outgoing message.
+  // Real-world WhatsApp/Telnyx convention:
+  //   pending    -> no tick (message queued, not yet sent)
+  //   sent       -> single grey tick (accepted by Telnyx, not yet on handset)
+  //   delivered  -> double blue tick (confirmed by carrier delivery report)
+  //   simulated  -> single grey tick + "simulated" label (no real SMS)
+  //   failed     -> red triangle (Telnyx rejected)
+  const renderDeliveryTick = (
+    status: 'pending' | 'sent' | 'delivered' | 'simulated' | 'failed' | undefined,
+  ) => {
+    if (status === 'pending' || !status) return null;
+    if (status === 'failed') {
+      return <AlertTriangle className="w-3.5 h-3.5 text-red-300" title="SMS send failed" />;
+    }
+    if (status === 'delivered') {
+      return (
+        <span title="Delivered (confirmed by carrier)">
+          <CheckCheck className="w-3.5 h-3.5 text-white" />
+        </span>
+      );
+    }
+    if (status === 'simulated') {
+      return (
+        <span title="Simulated — no real SMS sent">
+          <Check className="w-3.5 h-3.5 text-white/60" />
+        </span>
+      );
+    }
+    // sent: single tick
+    return (
+      <span title="Sent to Telnyx (delivery not yet confirmed)">
+        <Check className="w-3.5 h-3.5 text-white/80" />
+      </span>
+    );
+  };
+
   // Render chat list item status icons helper
   const renderItemStatusIndicators = (biz: Business) => {
     const hasIncoming = biz.smsHistory.some(m => m.type === 'incoming');
-    const isSent = biz.smsHistory.some(m => m.type === 'outgoing');
+    const lastOut = [...biz.smsHistory].reverse().find(m => m.type === 'outgoing');
+    const delivery = lastOut?.deliveryStatus;
+    const isDelivered = delivery === 'delivered';
+    const isSimulated = delivery === 'simulated';
+    const isSent = Boolean(lastOut) || biz.siteStatus === 'SMS sent' || biz.siteStatus === 'Converted';
+    const isFailed = delivery === 'failed';
+
+    const sentLabel = isFailed
+      ? 'Failed'
+      : isDelivered
+        ? 'Delivered'
+        : isSimulated
+          ? 'Simulated'
+          : isSent
+            ? 'Sent'
+            : 'Not sent';
+    const sentIcon = isFailed ? (
+      <AlertTriangle className="w-3 h-3 shrink-0" />
+    ) : isDelivered ? (
+      <CheckCheck className="w-3 h-3 shrink-0" />
+    ) : (
+      <Check className="w-3 h-3 shrink-0" />
+    );
+    const sentClass = isFailed
+      ? 'bg-danger-soft text-danger border border-danger/20'
+      : isDelivered
+        ? 'bg-success-soft text-success border border-success/10'
+        : isSimulated
+          ? 'bg-off-white text-ink-tertiary border border-border-main'
+          : isSent
+            ? 'bg-amber-500/10 text-amber-800 border border-amber-500/15'
+            : 'bg-off-white text-ink-secondary border border-border-main';
 
     return (
       <div className="flex gap-2 items-center">
-        {/* Sent/Delivered Button */}
+        {/* Sent/Delivered/Simulated/Failed Button */}
         <button
           onClick={(e) => {
             e.stopPropagation();
             toggleStatusDirect(biz.id, 'sent');
           }}
-          title="Toggle message Sent and Delivered confirmation state"
-          className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer select-none transition-all ${
-            isSent || biz.siteStatus === 'SMS sent' || biz.siteStatus === 'Converted'
-              ? 'bg-success-soft text-success border border-success/10'
-              : 'bg-off-white text-ink-secondary border border-border-main'
-          }`}
+          title={`SMS delivery: ${sentLabel}${isSimulated ? ' (no real message was sent)' : ''}`}
+          className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer select-none transition-all ${sentClass}`}
         >
-          <CheckCheck className="w-3 h-3 shrink-0" />
-          <span>Sent & Deliv.</span>
+          {sentIcon}
+          <span>{sentLabel}</span>
         </button>
 
         {/* Received Button */}
@@ -391,7 +454,7 @@ export const Messages: React.FC<MessagesProps> = ({
                         <p className="whitespace-pre-wrap leading-relaxed font-medium">{msg.text}</p>
                         <div className={`text-[10px] mt-2 flex items-center gap-1 ${isOut ? 'text-white/70 justify-end' : 'text-ink-tertiary justify-start'}`}>
                           <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                          {isOut && <CheckCheck className="w-3.5 h-3.5" />}
+                          {isOut && renderDeliveryTick(msg.deliveryStatus)}
                         </div>
                       </div>
                     </div>
