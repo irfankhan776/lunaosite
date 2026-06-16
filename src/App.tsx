@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Home, Megaphone, LayoutTemplate, MessageSquare, Settings as SettingsIcon, CreditCard, Code2, CalendarCheck } from 'lucide-react';
+import { Home, Megaphone, LayoutTemplate, MessageSquare, Settings as SettingsIcon, CreditCard, Code2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { Campaigns } from './components/Campaigns';
 import { Templates } from './components/Templates';
 import { Editor } from './components/Editor';
-import { Bookings } from './components/Bookings';
 import { Messages } from './components/Messages';
 import { Settings } from './components/Settings';
 import { Plans } from './components/Plans';
@@ -211,10 +210,10 @@ function DashboardApp({ user }: { user: any }) {
       <nav id="mobile-dock-saas" className={`fixed md:hidden bottom-4 left-1/2 -translate-x-1/2 z-40 bg-white/95 backdrop-blur-xl border border-[#E4E2DC]/80 shadow-[0_16px_40px_rgba(26,25,22,0.18)] overflow-hidden transition-[width,height,border-radius,box-shadow] duration-[400ms] ease-[cubic-bezier(0.25,1,0.3,1)] ${isNavMinimized ? 'h-[52px] w-[280px] rounded-[30px] shadow-[0_8px_32px_rgba(26,25,22,0.14)]' : 'h-[68px] w-[calc(100%-32px)] max-w-[420px] rounded-[24px]'}`}>
         <div className="absolute inset-x-0 bottom-0 h-10 w-full bg-gradient-to-t from-accent/10 to-transparent blur-lg opacity-50 -z-10 animate-pulse pointer-events-none" />
         {(() => {
-          const tabsList = ['dashboard', 'campaigns', 'templates', 'editor', 'bookings', 'messages', 'plans', 'settings'];
+          const tabsList = ['dashboard', 'campaigns', 'templates', 'editor', 'messages', 'plans', 'settings'];
           const activeIndex = tabsList.indexOf(activeTab);
           return (
-            <div className="absolute top-1.5 bottom-1.5 bg-accent-soft/85 border border-accent/15 pointer-events-none spring-pill-transition shadow-[0_2px_12px_rgba(37,99,235,0.08)] transition-all duration-300" style={{ left: '6px', width: 'calc((100% - 12px) / 8)', borderRadius: isNavMinimized ? '9999px' : '16px', transform: `translateX(${activeIndex * 100}%)` }} />
+            <div className="absolute top-1.5 bottom-1.5 bg-accent-soft/85 border border-accent/15 pointer-events-none spring-pill-transition shadow-[0_2px_12px_rgba(37,99,235,0.08)] transition-all duration-300" style={{ left: '6px', width: 'calc((100% - 12px) / 7)', borderRadius: isNavMinimized ? '9999px' : '16px', transform: `translateX(${activeIndex * 100}%)` }} />
           );
         })()}
         <div className="relative w-full h-full flex items-center px-1.5">
@@ -223,7 +222,6 @@ function DashboardApp({ user }: { user: any }) {
             { id: 'campaigns' as SidebarTab, label: 'Launch', icon: Megaphone },
             { id: 'templates' as SidebarTab, label: 'Templates', icon: LayoutTemplate },
             { id: 'editor' as SidebarTab, label: 'Editor', icon: Code2 },
-            { id: 'bookings' as SidebarTab, label: 'Bookings', icon: CalendarCheck },
             { id: 'messages' as SidebarTab, label: 'Outreach', icon: MessageSquare },
             { id: 'plans' as SidebarTab, label: 'Plans', icon: CreditCard },
             { id: 'settings' as SidebarTab, label: 'Settings', icon: SettingsIcon },
@@ -264,9 +262,6 @@ function DashboardApp({ user }: { user: any }) {
           </div>
           <div className={activeTab === 'editor' ? 'block animate-fade-in' : 'hidden'}>
             <Editor active={activeTab === 'editor'} />
-          </div>
-          <div className={activeTab === 'bookings' ? 'block animate-fade-in' : 'hidden'}>
-            <Bookings active={activeTab === 'bookings'} />
           </div>
           <div className={activeTab === 'messages' ? 'block animate-fade-in' : 'hidden'}>
             <Messages businesses={businesses} setBusinesses={setBusinesses} setActiveTab={setActiveTab} />

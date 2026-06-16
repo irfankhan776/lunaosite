@@ -4,7 +4,7 @@ import {
   Send, Monitor, Smartphone, Wand2, Loader2, ExternalLink, X,
   Rocket, AlertCircle, Pencil, CheckCircle2, Link2,
   Globe, Copy, Eye, Search, RefreshCw, Clock,
-  Puzzle, CalendarCheck, MessageCircle, UserPlus,
+  Puzzle, MessageCircle, UserPlus,
 } from 'lucide-react';
 import {
   listSites, getSiteHtml, saveSiteHtml, deploySite, streamAiEdit,
@@ -104,10 +104,10 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
   const [imgUrl, setImgUrl] = useState('');
   const selectedImgRef = useRef<HTMLImageElement | null>(null);
 
-  // Add-ons (booking system + booking chatbot)
+  // Add-ons (booking chatbot)
   const [addonsPanel, setAddonsPanel] = useState(false);
   const [addons, setAddonsState] = useState<SiteAddons>({ booking: false, chatbot: false });
-  const [addonBusy, setAddonBusy] = useState<null | 'booking' | 'chatbot'>(null);
+  const [addonBusy, setAddonBusy] = useState<null | 'chatbot'>(null);
 
   // Invite client (per-site LUNAO-XXXX-XXXX codes)
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -346,7 +346,7 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
   };
 
   // ---- Add-ons (booking + chatbot) -----------------------------------------
-  const toggleAddon = async (kind: 'booking' | 'chatbot') => {
+  const toggleAddon = async (kind: 'chatbot') => {
     if (!selected || addonBusy) return;
     sfx.toggle();
     const next: SiteAddons = { ...addons, [kind]: !addons[kind] };
@@ -364,7 +364,7 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
       sfx.saved();
       flashToast({
         type: 'success',
-        text: `${kind === 'booking' ? 'Booking system' : 'Booking chatbot'} ${next[kind] ? 'enabled' : 'removed'} — Redeploy to push live.`,
+        text: `Booking chatbot ${next[kind] ? 'enabled' : 'removed'} — Redeploy to push live.`,
       });
     } catch (err: any) {
       sfx.error();
@@ -665,14 +665,14 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
         <button
           onClick={() => { sfx.open(); setAddonsPanel(true); }}
           className={`relative inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium font-sans active:scale-[0.98] transition-all border ${
-            addons.booking || addons.chatbot ? 'bg-accent-soft text-accent border-accent/30' : 'bg-white text-ink-secondary border-border-main hover:text-ink'
+            addons.chatbot ? 'bg-accent-soft text-accent border-accent/30' : 'bg-white text-ink-secondary border-border-main hover:text-ink'
           }`}
-          title="Add a booking system & chatbot to this site"
+          title="Add a booking chatbot to this site"
         >
           <Puzzle className="w-4 h-4" /> <span className="hidden sm:inline">Add-ons</span>
-          {(addons.booking || addons.chatbot) && (
+          {addons.chatbot && (
             <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-accent text-white text-[10px] font-bold tabular-nums">
-              {Number(addons.booking) + Number(addons.chatbot)}
+              1
             </span>
           )}
         </button>
@@ -943,15 +943,6 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
                   One-click upgrades that live on Lunao. Toggle on, then Redeploy to push them live.
                 </p>
 
-                <AddonToggle
-                  icon={<CalendarCheck className="w-5 h-5" />}
-                  title="Booking System"
-                  desc="A real booking form that saves every appointment to your dashboard."
-                  enabled={addons.booking}
-                  busy={addonBusy === 'booking'}
-                  onToggle={() => toggleAddon('booking')}
-                />
-                <div className="h-3" />
                 <AddonToggle
                   icon={<MessageCircle className="w-5 h-5" />}
                   title="Booking Chatbot"

@@ -58,7 +58,7 @@ export interface SmsLog {
   previewLink: string;
 }
 
-export type SidebarTab = 'dashboard' | 'campaigns' | 'templates' | 'editor' | 'bookings' | 'messages' | 'settings' | 'plans';
+export type SidebarTab = 'dashboard' | 'campaigns' | 'templates' | 'editor' | 'messages' | 'settings' | 'plans';
 
 export interface DeployedSite {
   slug: string;
