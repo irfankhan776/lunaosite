@@ -1,0 +1,283 @@
+// Persistence for the booking system + chatbot + credit economy + campaigns
+// + SMS logs. Auto-detects the database engine:
+//
+//   1. If DATABASE_URL is set (Railway Postgres, Supabase, Neon, etc.),
+//      uses the `pg` driver. We wrap the connection in a tiny adapter
+//      that exposes the same `db.prepare(sql).run/get/all(...)` shape the
+//      app is already coded against, so callers don't need to change.
+//
+//   2. Otherwise falls back to the local `better-sqlite3` file at
+//      $DATA_DIR/lunao.db (default: $ROOT_DIR/server/.data/lunao.db).
+//
+// The schema is identical across both engines: identical column names +
+// types. Auto-increment columns are INTEGER PRIMARY KEY AUTOINCREMENT
+// (SQLite) and BIGSERIAL PRIMARY KEY (Postgres) — see `execSqliteSchema` /
+// `execPgSchema` for the rewrites.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ROOT_DIR } from './config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const env = process.env;
+
+const DATA_DIR = env.DATA_DIR || path.join(ROOT_DIR, 'server', '.data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const HAS_PG = Boolean(env.DATABASE_URL);
+
+// Lazy-loaded drivers.
+const sqliteDriver = (await import('better-sqlite3')).default;
+let pgPool = null;
+if (HAS_PG) {
+  const { Pool } = await import('pg');
+  pgPool = new Pool({
+    connectionString: env.DATABASE_URL,
+    ssl: env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 30_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Schema DDL (one block, identical column names + types for both engines)
+// ---------------------------------------------------------------------------
+const SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS bookings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug          TEXT    NOT NULL,
+    business_name TEXT    NOT NULL DEFAULT '',
+    customer_name TEXT    NOT NULL DEFAULT '',
+    phone         TEXT    NOT NULL DEFAULT '',
+    email         TEXT    NOT NULL DEFAULT '',
+    service       TEXT    NOT NULL DEFAULT '',
+    date          TEXT    NOT NULL DEFAULT '',
+    time          TEXT    NOT NULL DEFAULT '',
+    notes         TEXT    NOT NULL DEFAULT '',
+    source        TEXT    NOT NULL DEFAULT 'form',
+    status        TEXT    NOT NULL DEFAULT 'new',
+    created_at    INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_bookings_slug ON bookings(slug);
+  CREATE INDEX IF NOT EXISTS idx_bookings_created ON bookings(created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS chat_sessions (
+    id         TEXT    PRIMARY KEY,
+    slug       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT    NOT NULL,
+    slug       TEXT    NOT NULL,
+    role       TEXT    NOT NULL,
+    content    TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+
+  CREATE TABLE IF NOT EXISTS site_addons (
+    slug            TEXT    PRIMARY KEY,
+    booking_enabled INTEGER NOT NULL DEFAULT 0,
+    chatbot_enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at      INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS invite_codes (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    code           TEXT    UNIQUE NOT NULL,
+    slug           TEXT    NOT NULL,
+    label          TEXT,
+    created_at     INTEGER NOT NULL,
+    used_at        INTEGER,
+    last_active_at INTEGER,
+    revoked_at     INTEGER,
+    redeemed_count INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_invite_codes_slug ON invite_codes(slug);
+  CREATE INDEX IF NOT EXISTS idx_invite_codes_code ON invite_codes(code);
+
+  CREATE TABLE IF NOT EXISTS credit_accounts (
+    owner_key         TEXT    PRIMARY KEY,
+    plan              TEXT    NOT NULL DEFAULT 'Free Plan',
+    balance           INTEGER NOT NULL DEFAULT 0,
+    lifetime_used     INTEGER NOT NULL DEFAULT 0,
+    lifetime_refunded INTEGER NOT NULL DEFAULT 0,
+    updated_at        INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS credit_ledger (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_key     TEXT    NOT NULL,
+    delta         INTEGER NOT NULL,
+    reason        TEXT    NOT NULL,
+    ref_type      TEXT,
+    ref_id        TEXT,
+    balance_after INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_credit_ledger_owner ON credit_ledger(owner_key, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS campaigns (
+    id               TEXT    PRIMARY KEY,
+    owner_key        TEXT    NOT NULL,
+    niche            TEXT,
+    name             TEXT,
+    status           TEXT    NOT NULL DEFAULT 'running',
+    total_leads      INTEGER NOT NULL DEFAULT 0,
+    sites_generated  INTEGER NOT NULL DEFAULT 0,
+    sms_sent         INTEGER NOT NULL DEFAULT 0,
+    sms_failed       INTEGER NOT NULL DEFAULT 0,
+    sms_skipped      INTEGER NOT NULL DEFAULT 0,
+    credits_charged  INTEGER NOT NULL DEFAULT 0,
+    credits_refunded INTEGER NOT NULL DEFAULT 0,
+    sms_template     TEXT,
+    csv_snapshot     TEXT,
+    started_at       INTEGER NOT NULL,
+    completed_at     INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_campaigns_owner ON campaigns(owner_key, started_at DESC);
+
+  CREATE TABLE IF NOT EXISTS campaign_leads (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id       TEXT    NOT NULL,
+    name              TEXT    NOT NULL DEFAULT '',
+    phone             TEXT    NOT NULL DEFAULT '',
+    email             TEXT    NOT NULL DEFAULT '',
+    city              TEXT    NOT NULL DEFAULT '',
+    niche             TEXT    NOT NULL DEFAULT '',
+    slug              TEXT    NOT NULL DEFAULT '',
+    site_url          TEXT,
+    site_status       TEXT    NOT NULL DEFAULT 'pending',
+    sms_status        TEXT    NOT NULL DEFAULT 'pending',
+    sms_error         TEXT,
+    index_in_campaign INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_campaign_leads_campaign ON campaign_leads(campaign_id, index_in_campaign);
+  CREATE INDEX IF NOT EXISTS idx_campaign_leads_phone ON campaign_leads(phone);
+
+  CREATE TABLE IF NOT EXISTS sms_logs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id   TEXT,
+    lead_id       INTEGER,
+    owner_key     TEXT,
+    to_number     TEXT    NOT NULL DEFAULT '',
+    from_number   TEXT    NOT NULL DEFAULT '',
+    body          TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT 'pending',
+    telnyx_id     TEXT,
+    error_code    TEXT,
+    error_message TEXT,
+    segment_count INTEGER NOT NULL DEFAULT 1,
+    cost_credits  INTEGER NOT NULL DEFAULT 0,
+    refunded      INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_sms_logs_campaign ON sms_logs(campaign_id);
+  CREATE INDEX IF NOT EXISTS idx_sms_logs_lead ON sms_logs(lead_id);
+  CREATE INDEX IF NOT EXISTS idx_sms_logs_telnyx ON sms_logs(telnyx_id);
+  CREATE INDEX IF NOT EXISTS idx_sms_logs_owner ON sms_logs(owner_key, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS sms_inbound (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    telnyx_id   TEXT,
+    from_number TEXT    NOT NULL DEFAULT '',
+    to_number   TEXT    NOT NULL DEFAULT '',
+    body        TEXT    NOT NULL DEFAULT '',
+    kind        TEXT    NOT NULL DEFAULT 'inbound',
+    status      TEXT,
+    raw         TEXT,
+    created_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_sms_inbound_from ON sms_inbound(from_number, created_at DESC);
+`;
+
+// ---------------------------------------------------------------------------
+// pg adapter (same `prepare().run/get/all` shape as better-sqlite3)
+// ---------------------------------------------------------------------------
+function makePgAdapter(pool) {
+  // Column names whose values we coerce from string to Number. pg returns
+  // BIGINT as a string to preserve precision; our ids are small (<2^53) so
+  // we can safely round-trip through Number.
+  const NUMERIC_KEYS = new Set([
+    'id', 'redeemed_count', 'segment_count', 'cost_credits', 'refunded',
+    'booking_enabled', 'chatbot_enabled', 'total_leads', 'sites_generated',
+    'sms_sent', 'sms_failed', 'sms_skipped', 'credits_charged',
+    'credits_refunded', 'balance', 'lifetime_used', 'lifetime_refunded',
+    'delta', 'balance_after', 'index_in_campaign', 'lead_id',
+  ]);
+
+  const normalise = (row) => {
+    if (!row) return row;
+    const out = {};
+    for (const k of Object.keys(row)) {
+      const v = row[k];
+      if (typeof v === 'string' && /^\d+$/.test(v) && NUMERIC_KEYS.has(k)) {
+        out[k] = Number(v);
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  };
+
+  return {
+    prepare(sql) {
+      return {
+        run: async (...params) => {
+          const flat = params.flat(Infinity).filter((p) => p !== undefined);
+          const r = await pool.query(sql, flat);
+          return {
+            lastInsertRowid:
+              r.rows[0] && r.rows[0].id != null ? Number(r.rows[0].id) : null,
+            changes: r.rowCount,
+          };
+        },
+        get: async (...params) => {
+          const flat = params.flat(Infinity).filter((p) => p !== undefined);
+          const r = await pool.query(sql, flat);
+          return r.rows[0] ? normalise(r.rows[0]) : undefined;
+        },
+        all: async (...params) => {
+          const flat = params.flat(Infinity).filter((p) => p !== undefined);
+          const r = await pool.query(sql, flat);
+          return r.rows.map(normalise);
+        },
+      };
+    },
+    exec: async (sqlBlock) => {
+      // Translate SQLite DDL -> Postgres DDL.
+      const pg = sqlBlock
+        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, 'BIGSERIAL PRIMARY KEY')
+        .replace(/INTEGER NOT NULL/gi, 'BIGINT NOT NULL')
+        .replace(/\bINTEGER\b/g, 'BIGINT');
+      const stmts = pg.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
+      for (const stmt of stmts) await pool.query(stmt);
+    },
+    pragma: () => {},
+    close: () => pool.end(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Boot the database
+// ---------------------------------------------------------------------------
+let _db;
+
+if (HAS_PG && pgPool) {
+  _db = makePgAdapter(pgPool);
+  await _db.exec(SCHEMA_SQL);
+  console.log('[db] Connected to Postgres (DATABASE_URL detected)');
+} else {
+  const DB_PATH = path.join(DATA_DIR, 'lunao.db');
+  _db = new sqliteDriver(DB_PATH);
+  _db.pragma('journal_mode = WAL');
+  _db.pragma('foreign_keys = ON');
+  _db.exec(SCHEMA_SQL);
+  console.log(`[db] SQLite at ${DB_PATH}`);
+}
+
+export const db = _db;
+export default _db;

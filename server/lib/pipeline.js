@@ -1,0 +1,309 @@
+// End-to-end campaign pipeline orchestrator.
+//
+// Per PROJECT_CONTEXT.md the lifecycle for each business is:
+//   (A) read raw template -> (B) replace placeholders -> (C) deploy ->
+//   (D) build link -> (E) dispatch SMS
+//
+// For efficiency we compile + stage every site first, publish the whole batch
+// to Cloudflare Pages once, then dispatch SMS. Events are streamed back via the
+// onEvent callback so both the SSE API and the CLI can render live progress.
+//
+// Server-side persistence + credit enforcement are optional but strongly
+// recommended. If `campaignId`, `leadIds`, `ownerKey` are passed, every lead
+// outcome and SMS send is recorded in the database, and SMS failures are
+// auto-refunded (3 credits per lead with no successful SMS).
+import { compileSite } from './compile.js';
+import { stageSite, publishBatch } from './cloudflare.js';
+import { sendSms, renderSms, countSegments, toE164, fetchMessageStatus } from './telnyx.js';
+import { slugify } from './slug.js';
+import { cloudflare, telnyx, modeSummary } from './config.js';
+import {
+  recordLeadResult,
+  logSmsAttempt,
+  updateSmsStatus,
+  getCampaign,
+  finalizeCampaign,
+  markCampaignFailed,
+} from './campaigns.js';
+import { refund, getAccount } from './credits.js';
+
+const DEFAULT_SMS =
+  "Hi, we noticed {{business_name}} doesn't have a website yet to showcase your services in {{city}}.\n\nWe built a beautiful custom preview for you — take a look: {{site_url}}\n\nReply YES to publish it instantly!\n\n— The Lunao Team";
+
+// Cost model — kept in sync with src/App.tsx (COST_PER_LEAD = 4).
+// 3 credits are reserved per lead for SMS (refunded on SMS failure),
+// 1 credit is reserved for site gen (refunded on site gen failure).
+export const COST_PER_LEAD = 4;
+export const SMS_COST_PER_LEAD = 3;
+export const SITE_COST_PER_LEAD = 1;
+
+export async function runPipeline({
+  businesses = [],
+  niche,
+  smsTemplate,
+  onEvent = () => {},
+  // Server-side persistence + enforcement (optional but recommended).
+  ownerKey = null,
+  campaignId = null, // maps businesses[i] to leads[campaignId][i]
+  leadIds = [],      // parallel array of DB lead ids; indexed by businesses[i]
+} = {}) {
+  const emit = (type, payload = {}) => onEvent({ type, ts: Date.now(), ...payload });
+  const results = [];
+  const template = smsTemplate || DEFAULT_SMS;
+  const useDb = Boolean(ownerKey && campaignId && Array.isArray(leadIds) && leadIds.length === businesses.length);
+
+  // ---- Server-side credit balance is owned by the route, not the pipeline.
+  // The route (POST /api/campaign/run) is responsible for the pre-flight
+  // charge and 402 response. By the time we get here the user has already
+  // paid COST_PER_LEAD per business. We only handle the *refund* path
+  // (site-failed, sms-failed) inside the pipeline.
+  let account = null;
+  if (ownerKey) {
+    try {
+      account = getAccount(ownerKey);
+    } catch (err) {
+      emit('credits:error', { error: err.message });
+    }
+  }
+  if (ownerKey && account) {
+    emit('credits:charged', { amount: businesses.length * COST_PER_LEAD, balance: account.balance, source: 'route' });
+  }
+
+  emit('start', {
+    total: businesses.length,
+    niche: niche || '(per-row)',
+    mode: modeSummary(),
+    campaignId,
+  });
+
+  // Phase A: compile + stage every personalized site.
+  for (let i = 0; i < businesses.length; i++) {
+    const biz = businesses[i];
+    const index = i + 1;
+    const targetNiche = biz.niche || niche;
+    const slug = biz.slug || slugify(biz.name, biz.city);
+    const leadId = useDb ? leadIds[i] : null;
+
+    emit('site:compiling', { index, name: biz.name, slug });
+    try {
+      const { html, templateFile } = await compileSite(biz, targetNiche);
+      const siteUrl = await stageSite(slug, html);
+      const result = {
+        index,
+        name: biz.name,
+        phone: biz.phone || '',
+        city: biz.city || '',
+        slug,
+        templateFile,
+        siteUrl,
+        siteStatus: 'generated',
+        smsStatus: 'pending',
+        leadId,
+      };
+      results.push(result);
+      if (useDb) {
+        recordLeadResult(leadId, { siteStatus: 'generated', siteUrl, smsStatus: 'pending' });
+      }
+      emit('site:generated', { index, name: biz.name, slug, siteUrl, templateFile });
+    } catch (err) {
+      const result = {
+        index,
+        name: biz.name,
+        slug,
+        siteStatus: 'failed',
+        smsStatus: 'skipped',
+        error: err.message,
+        leadId,
+      };
+      results.push(result);
+      if (useDb) {
+        recordLeadResult(leadId, { siteStatus: 'failed', smsStatus: 'skipped', smsError: err.message });
+      }
+      // Refund the site-gen cost (1 credit) for this failed site.
+      if (ownerKey && leadId) {
+        try {
+          refund(ownerKey, SITE_COST_PER_LEAD, 'site_failed_refund', { type: 'lead', id: String(leadId) });
+        } catch (e) { /* ignore */ }
+      }
+      emit('site:failed', { index, name: biz.name, slug, error: err.message });
+    }
+  }
+
+  // Phase B: publish the whole staged directory to Cloudflare Pages (once).
+  const staged = results.filter((r) => r.siteStatus === 'generated');
+  if (staged.length) {
+    emit('deploy:start', { count: staged.length, live: cloudflare.live });
+    try {
+      const publish = await publishBatch();
+      emit('deploy:done', { ...publish, count: staged.length });
+    } catch (err) {
+      emit('deploy:error', { error: err.message });
+      // Sites are still staged locally; mark but continue (SMS may be skipped).
+    }
+  }
+
+  // Phase C: dispatch SMS for every successfully generated site.
+  for (const result of results) {
+    if (result.siteStatus !== 'generated') continue;
+    const text = renderSms(template, {
+      businessName: result.name,
+      city: result.city,
+      siteUrl: result.siteUrl,
+    });
+    // SMS master switch OFF -> queue as "Coming Soon", never call Telnyx.
+    if (!telnyx.enabled) {
+      result.smsStatus = 'coming_soon';
+      result.smsText = text;
+      if (useDb) {
+        recordLeadResult(result.leadId, { smsStatus: 'coming_soon' });
+      }
+      emit('sms:coming_soon', {
+        index: result.index,
+        name: result.name,
+        to: result.phone,
+        siteUrl: result.siteUrl,
+      });
+      continue;
+    }
+    if (!result.phone) {
+      result.smsStatus = 'skipped';
+      if (useDb) {
+        recordLeadResult(result.leadId, { smsStatus: 'skipped', smsError: 'No phone number' });
+      }
+      emit('sms:skipped', { index: result.index, name: result.name, reason: 'No phone number' });
+      continue;
+    }
+    const dest = toE164(result.phone);
+    if (!dest) {
+      result.smsStatus = 'failed';
+      result.smsText = text;
+      if (useDb) {
+        recordLeadResult(result.leadId, { smsStatus: 'failed', smsError: 'Invalid phone format' });
+      }
+      emit('sms:failed', { index: result.index, name: result.name, error: 'Invalid phone format' });
+      if (ownerKey && result.leadId) {
+        try {
+          refund(ownerKey, SMS_COST_PER_LEAD, 'sms_failed_refund', { type: 'lead', id: String(result.leadId) });
+        } catch (e) { /* ignore */ }
+      }
+      continue;
+    }
+
+    // Log the attempt *before* sending so we have a row even if the process
+    // crashes mid-flight.
+    let smsLogId = null;
+    if (useDb) {
+      const log = logSmsAttempt({
+        campaignId,
+        leadId: result.leadId,
+        ownerKey,
+        to: dest,
+        from: telnyx.from,
+        body: text,
+        status: 'queued',
+        segmentCount: countSegments(text),
+        costCredits: SMS_COST_PER_LEAD,
+      });
+      smsLogId = log.id;
+    }
+
+    emit('sms:sending', { index: result.index, name: result.name, to: dest });
+    try {
+      const sms = await sendSms({ to: result.phone, text });
+      result.smsStatus = sms.status;
+      result.smsSimulated = sms.simulated;
+      result.smsText = text;
+      result.smsLogId = smsLogId;
+      result.smsId = sms.id;
+      if (sms.status === 'failed') {
+        if (useDb) {
+          recordLeadResult(result.leadId, { smsStatus: 'failed', smsError: sms.error });
+          if (smsLogId) {
+            updateSmsStatus(smsLogId, {
+              status: 'failed',
+              error_code: sms.errorCode || 'E_UNKNOWN',
+              error_message: sms.error,
+            });
+          }
+        }
+        // Refund the SMS cost (3 credits) for this failed send.
+        if (ownerKey && result.leadId) {
+          try {
+            refund(ownerKey, SMS_COST_PER_LEAD, 'sms_failed_refund', { type: 'lead', id: String(result.leadId) });
+          } catch (e) { /* ignore */ }
+        }
+        emit('sms:failed', { index: result.index, name: result.name, error: sms.error, errorCode: sms.errorCode });
+      } else if (sms.status === 'simulated') {
+        if (useDb) {
+          recordLeadResult(result.leadId, { smsStatus: 'simulated' });
+          if (smsLogId) updateSmsStatus(smsLogId, { status: 'simulated' });
+        }
+        emit('sms:sent', {
+          index: result.index,
+          name: result.name,
+          to: sms.to,
+          siteUrl: result.siteUrl,
+          simulated: true,
+        });
+      } else {
+        if (useDb) {
+          recordLeadResult(result.leadId, { smsStatus: 'sent' });
+          if (smsLogId) {
+            updateSmsStatus(smsLogId, { status: 'sent', telnyx_id: sms.id, segment_count: sms.segmentCount || 1 });
+          }
+        }
+        // Best-effort: if Telnyx already reports delivered, upgrade the lead
+        // and sms_log status so the dashboard shows the real outcome.
+        if (!sms.simulated && sms.id) {
+          const status = await fetchMessageStatus(sms.id);
+          if (status && status.status === 'delivered') {
+            if (useDb) {
+              recordLeadResult(result.leadId, { smsStatus: 'delivered' });
+              if (smsLogId) updateSmsStatus(smsLogId, { status: 'delivered' });
+            }
+            result.smsStatus = 'delivered';
+          }
+        }
+        emit('sms:sent', {
+          index: result.index,
+          name: result.name,
+          to: sms.to,
+          siteUrl: result.siteUrl,
+          simulated: false,
+          telnyxId: sms.id,
+        });
+      }
+    } catch (err) {
+      result.smsStatus = 'failed';
+      if (useDb) {
+        recordLeadResult(result.leadId, { smsStatus: 'failed', smsError: err.message });
+        if (smsLogId) {
+          updateSmsStatus(smsLogId, { status: 'failed', error_code: 'E_THROW', error_message: err.message });
+        }
+      }
+      if (ownerKey && result.leadId) {
+        try {
+          refund(ownerKey, SMS_COST_PER_LEAD, 'sms_failed_refund', { type: 'lead', id: String(result.leadId) });
+        } catch (e) { /* ignore */ }
+      }
+      emit('sms:failed', { index: result.index, name: result.name, error: err.message });
+    }
+  }
+
+  const summary = {
+    total: businesses.length,
+    sitesGenerated: results.filter((r) => r.siteStatus === 'generated').length,
+    smsSent: results.filter((r) => r.smsStatus === 'sent' || r.smsStatus === 'simulated' || r.smsStatus === 'delivered').length,
+    smsComingSoon: results.filter((r) => r.smsStatus === 'coming_soon').length,
+    failed: results.filter((r) => r.siteStatus === 'failed' || r.smsStatus === 'failed').length,
+    telnyx: telnyx.live ? 'live' : telnyx.enabled ? 'simulated' : 'coming_soon',
+    cloudflare: cloudflare.live ? 'live' : 'local',
+  };
+  emit('done', { summary, results });
+  if (useDb) {
+    finalizeCampaign(campaignId, {
+      creditsCharged: businesses.length * COST_PER_LEAD,
+    });
+  }
+  return { summary, results };
+}

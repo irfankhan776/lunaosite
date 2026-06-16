@@ -1,0 +1,341 @@
+import React, { useState, useEffect } from 'react';
+import { Check, Shield, AlertCircle, TrendingUp, Info, Zap, Award } from 'lucide-react';
+import { playConfirmSuccess, playSoftTap } from '../utils/audio';
+import { SidebarTab } from '../types';
+
+interface PlansProps {
+  setActiveTab: (tab: SidebarTab) => void;
+  setUserPlan: (plan: string) => void;
+  userPlan: string;
+  userCredits: number;
+}
+
+export const Plans: React.FC<PlansProps> = ({
+  setActiveTab,
+  setUserPlan,
+  userPlan,
+  userCredits
+}) => {
+  // FOMO Interactive Seat States
+  const [agencySeats, setAgencySeats] = useState(170);
+  const [proSeats, setProSeats] = useState(400);
+
+  // Smooth ticking effect for FOMO counters
+  useEffect(() => {
+    const timer = setInterval(() => {
+      // Agency seats: go from 170 up to 240, then reset to 170
+      setAgencySeats((prev) => {
+        const next = prev + Math.floor(Math.random() * 2) + 1;
+        return next >= 240 ? 170 : next;
+      });
+
+      // Pro seats: go from 400 up to 520, then reset to 400
+      setProSeats((prev) => {
+        const next = prev + Math.floor(Math.random() * 3) + 1;
+        return next >= 520 ? 400 : next;
+      });
+    }, 6000); // ticked every 6 seconds for a realistic simulation
+
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleSelectPlan = (planName: string) => {
+    setUserPlan(planName);
+    playConfirmSuccess();
+  };
+
+  const planCards = [
+    {
+      id: 'Free',
+      name: 'Free',
+      price: '$0',
+      credits: '5 total credits',
+      textColor: 'text-ink-secondary',
+      borderColor: 'border-border-main',
+      badgeColor: 'bg-off-white text-ink-secondary border-border-main',
+      icon: <Award className="w-5 h-5 text-ink-secondary" />,
+      tagline: 'Best for testing how the platform works',
+      features: [
+        '5 outreach credits for testing',
+        'Target 1 city per campaign',
+        'Website deployment and preview generation',
+        'Standard processing speeds',
+        'Basic templates access'
+      ]
+    },
+    {
+      id: 'Starter',
+      name: 'Starter',
+      price: '$29',
+      credits: '300 total credits',
+      textColor: 'text-success',
+      borderColor: 'border-border-main',
+      badgeColor: 'bg-success-soft text-success border-success/10',
+      icon: <Award className="w-5 h-5 text-success" />,
+      tagline: 'Best for testing campaigns in one niche or city',
+      features: [
+        'Lead generation matching niche & city',
+        'Target up to 3 cities per campaign',
+        'Website deployment and preview generation',
+        'SMS outreach capability with custom copy',
+        'Single active campaign at any time'
+      ]
+    },
+    {
+      id: 'Growth',
+      name: 'Growth',
+      price: '$79',
+      credits: '1,000 total credits',
+      textColor: 'text-accent',
+      borderColor: 'border-accent',
+      badgeColor: 'bg-accent-soft text-accent border-accent/15',
+      icon: <Zap className="w-5 h-5 text-accent animate-pulse" />,
+      tagline: 'Recommended for consistent outreach campaigns',
+      isPopular: true,
+      features: [
+        'Everything in Starter included',
+        'Target up to 3 cities per campaign',
+        'Higher overall campaign dispatch volume',
+        'Priority layout & preview batch building',
+        'Up to 3 concurrent active campaigns'
+      ]
+    },
+    {
+      id: 'Pro',
+      name: 'Pro',
+      price: '$149',
+      credits: '2,500 + 500 = 3,000 credits',
+      textColor: 'text-purple-600',
+      borderColor: 'border-border-main',
+      badgeColor: 'bg-purple-50 text-purple-600 border-purple-500/10',
+      icon: <Shield className="w-5 h-5 text-purple-600" />,
+      tagline: 'Built for power users and growing agencies',
+      fomo: {
+        total: 600,
+        taken: proSeats,
+        label: 'Limited intake: 600 users allowed'
+      },
+      features: [
+        'Bring your own Telnyx API Key & Phone',
+        'Target unlimited cities per campaign',
+        'Send SMS globally to any country/city',
+        'Multi-campaign concurrent support (Unlimited)',
+        'Premium high-conversion templates with multi-page',
+        'Dedicated server queue priority support'
+      ]
+    },
+    {
+      id: 'Agency',
+      name: 'Agency',
+      price: '$299',
+      credits: '6,000 + 1,000 = 7,000 credits',
+      textColor: 'text-red-600',
+      borderColor: 'border-border-main',
+      badgeColor: 'bg-red-50 text-red-600 border-red-500/10',
+      icon: <Shield className="w-5 h-5 text-red-600" />,
+      tagline: 'Full high-volume automation suite',
+      fomo: {
+        total: 250,
+        taken: agencySeats,
+        label: 'Strict beta limit: 250 users max'
+      },
+      features: [
+        'Bring your own Telnyx API Key & Phone',
+        'Target unlimited cities per campaign',
+        'Send SMS globally to any country/city',
+        'Full scheduling and outbound automation system',
+        'Multi-client management capability',
+        'Custom white-label domain routing'
+      ]
+    }
+  ];
+
+  return (
+    <div id="plans-tab-root-container" className="space-y-8 animate-fade-in font-sans text-left pb-16">
+      
+      {/* Page Header */}
+      <header id="plans-view-header" className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-border-main gap-4">
+        <div className="space-y-1">
+          <h1 className="text-4xl font-serif text-ink tracking-tight font-normal">Subscription plans</h1>
+          <p className="text-sm text-ink-secondary">Select the plan tier that fits your outreach goals. Upgrade or switch instantly to adjust credits.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 select-none">
+          <div className="bg-success-soft/30 border border-success/15 rounded-xl px-4 py-2.5 flex items-center gap-2.5 text-left shadow-2xs">
+            <span className="w-2.5 h-2.5 rounded-full bg-success animate-pulse shrink-0"></span>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-extrabold text-ink-secondary">Current Live Balance</div>
+              <div className="text-lg font-bold font-sans text-ink">{userCredits.toLocaleString()} Credits</div>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              playSoftTap();
+              setActiveTab('dashboard');
+            }}
+            className="px-4 py-2 border border-border-main text-ink text-xs font-bold uppercase tracking-wider rounded bg-white hover:bg-off-white active:scale-95 transition-all cursor-pointer"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </header>
+
+      {/* Credit System Guide Card */}
+      <div className="bg-white border border-border-main rounded-xl p-5 md:p-6 shadow-3xs">
+        <div className="flex flex-col md:flex-row gap-6 md:items-center justify-between">
+          <div className="space-y-2 max-w-2xl">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-accent-soft text-accent border border-accent/20">
+              <Info className="w-3 h-3" />
+              Transparent Pricing System
+            </span>
+            <h2 className="text-xl font-serif text-ink tracking-tight font-normal">How Credits Work</h2>
+            <p className="text-xs text-ink-secondary leading-relaxed">
+              Every subscription tier is backed by monthly credits that are debited based strictly on performance actions. Unused credits rollover directly into the subsequent billing cycle.
+            </p>
+          </div>
+          
+          {/* Exchange Rates Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:max-w-md">
+            <div className="bg-off-white border border-border-light rounded-lg p-3.5 text-center">
+              <span className="text-[9px] uppercase font-bold text-ink-secondary tracking-widest block mb-1">Leads Discovered</span>
+              <div className="text-base font-bold text-ink font-sans">3 Leads / Credit</div>
+              <span className="text-[10px] text-ink-tertiary">Crawl/fetch 3 leads per 1 credit</span>
+            </div>
+            
+            <div className="bg-off-white border border-border-light rounded-lg p-3.5 text-center">
+              <span className="text-[9px] uppercase font-bold text-ink-secondary tracking-widest block mb-1">Preview Deployed</span>
+              <div className="text-base font-bold text-ink font-sans">1 Credit</div>
+              <span className="text-[10px] text-ink-tertiary font-sans">Per live mockup build</span>
+            </div>
+
+            <div className="bg-off-white border border-border-light rounded-lg p-3.5 text-center">
+              <span className="text-[9px] uppercase font-bold text-ink-secondary tracking-widest block mb-1">SMS Dispatched</span>
+              <div className="text-base font-bold text-ink font-sans">3 Credits</div>
+              <span className="text-[10px] text-ink-tertiary">Per unique invite sent</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Plans Pricing Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {planCards.map((plan) => {
+          const normalizePlan = (name: string) => name.replace(' Plan', '').replace(' Tier', '').trim().toLowerCase();
+          const isActive = normalizePlan(userPlan) === normalizePlan(plan.name);
+          
+          return (
+            <div
+              key={plan.id}
+              className={`bg-white border rounded-2xl flex flex-col justify-between overflow-hidden shadow-sm transition-all focus-within:ring-2 focus-within:ring-accent ${
+                plan.isPopular ? 'border-accent ring-1 ring-accent/20 scale-102 lg:-translate-y-2' : 'border-border-main'
+              } ${isActive ? 'bg-accent-soft/10 ring-2 ring-accent/30' : ''}`}
+            >
+              {/* Popular Tab or Spacer */}
+              {plan.isPopular ? (
+                <div className="bg-accent text-white text-[10px] font-bold uppercase tracking-wider text-center py-1.5 w-full">
+                  Most Popular Choice
+                </div>
+              ) : (
+                <div className="h-2 w-full bg-transparent" />
+              )}
+
+              {/* Main plan contents */}
+              <div className="p-6 flex-1 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-lg font-bold text-ink font-sans">{plan.name}</span>
+                    <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${plan.badgeColor}`}>
+                      {plan.name}
+                    </span>
+                  </div>
+
+                  {/* Pricing details */}
+                  <div className="mt-4 flex items-baseline gap-1">
+                    <span className="text-4xl font-serif text-ink font-semibold">{plan.price}</span>
+                    <span className="text-xs text-ink-secondary font-sans">/ month</span>
+                  </div>
+
+                  <div className="mt-1.5 mb-3">
+                    {isActive ? (
+                      <div className="flex flex-col gap-1 bg-success-soft/30 px-3 py-1.5 rounded-lg border border-success/10">
+                        <span className="text-[10px] font-bold text-success uppercase tracking-wider">Active Credits Remaining</span>
+                        <span className="text-base font-extrabold text-success font-sans leading-none">{userCredits.toLocaleString()} Credits</span>
+                      </div>
+                    ) : (
+                      plan.id === 'Pro' || plan.id === 'Agency' ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-xs text-accent font-bold font-sans">
+                            {plan.id === 'Pro' ? '3,000' : '7,000'} total credits
+                          </span>
+                          <span className="text-[10px] text-success font-bold tracking-wide uppercase flex items-center gap-1">
+                            <span className="w-1 h-1 rounded-full bg-success"></span>
+                            {plan.id === 'Pro' ? '2,500 + 500 Bonus' : '6,000 + 1,000 Bonus'}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-accent font-semibold font-sans">{plan.credits}</p>
+                      )
+                    )}
+                  </div>
+                  <p className="text-[11.5px] text-ink-secondary leading-relaxed mb-6 block border-b border-border-light pb-4 min-h-[48px]">
+                    {plan.tagline}
+                  </p>
+
+                  {/* FOMO Section */}
+                  {plan.fomo && (
+                    <div className="mb-6 p-3 bg-red-50/50 border border-red-500/10 rounded-lg space-y-2 animate-fade-in">
+                      <div className="flex items-center justify-between text-[11px] font-medium text-red-700">
+                        <span className="flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-ping"></span>
+                          {plan.fomo.label}
+                        </span>
+                        <span className="font-semibold font-mono">{plan.fomo.taken} / {plan.fomo.total}</span>
+                      </div>
+                      <div className="w-full bg-red-200/40 h-1.5 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-red-600 h-full rounded-full transition-all duration-1000 ease-out" 
+                          style={{ width: `${(plan.fomo.taken / plan.fomo.total) * 100}%` }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-red-600/80 leading-normal">
+                        Only {plan.fomo.total - plan.fomo.taken} configurations remaining today before queue locks.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Features list */}
+                  <ul className="space-y-3 text-left">
+                    {plan.features.map((feature, i) => (
+                      <li key={i} className="flex items-start gap-2.5">
+                        <span className="p-0.5 rounded-full bg-accent-soft text-accent shrink-0 mt-0.5">
+                          <Check className="w-3 h-3 text-accent" />
+                        </span>
+                        <span className="text-[11.5px] text-ink-secondary leading-normal">{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Purchase / Select Button */}
+              <div className="p-6 pt-0 mt-6 shrink-0">
+                <button
+                  onClick={() => handleSelectPlan(`${plan.name} Plan`)}
+                  className={`w-full py-2.5 rounded text-center text-xs font-bold uppercase tracking-wider transition-all duration-150 active:scale-97 cursor-pointer ${
+                    isActive
+                      ? 'bg-ink text-white hover:bg-ink-secondary shadow-sm'
+                      : plan.isPopular
+                      ? 'bg-accent text-white hover:bg-accent-hover shadow-md'
+                      : 'bg-off-white border border-border-main text-ink hover:bg-surface'
+                  }`}
+                >
+                  {isActive ? 'Current Active Tier' : `Select ${plan.name}`}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+    </div>
+  );
+};
