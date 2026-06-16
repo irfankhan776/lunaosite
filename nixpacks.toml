@@ -5,7 +5,7 @@
 builder = "nixpacks"
 
 [phases.setup]
-nixPkgs = ["nodejs_20", "npm_10_x"]
+nixPkgs = ["nodejs_20"]
 
 [phases.install]
 cmds = ["npm ci --include=dev"]
