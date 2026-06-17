@@ -43,28 +43,9 @@ if (HAS_PG) {
 // Schema DDL (one block, identical column names + types for both engines)
 // ---------------------------------------------------------------------------
 const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS users (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    email            TEXT    UNIQUE NOT NULL,
-    name             TEXT    NOT NULL DEFAULT '',
-    password_hash    TEXT,
-    google_id        TEXT    UNIQUE,
-    avatar_url       TEXT,
-    email_verified   INTEGER NOT NULL DEFAULT 0,
-    created_at       INTEGER NOT NULL,
-    updated_at       INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS auth_tokens (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL,
-    token_hash  TEXT    NOT NULL,
-    expires_at  INTEGER NOT NULL,
-    created_at  INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-  CREATE INDEX IF NOT EXISTS idx_auth_tokens_user   ON auth_tokens(user_id);
-  CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash  ON auth_tokens(token_hash);
+  -- No "users" table in v2 — authentication is a single hardcoded site gate
+  -- password. All per-owner state lives in owner_key columns across the rest
+  -- of the schema (sites, campaigns, sms_logs, sms_inbound, credit_accounts).
 
   CREATE TABLE IF NOT EXISTS bookings (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

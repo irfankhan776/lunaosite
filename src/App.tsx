@@ -10,7 +10,7 @@ import { Settings } from './components/Settings';
 import { Plans } from './components/Plans';
 import { playTiktokLike, playSoftTap } from './utils/audio';
 import { Landing } from './Landing';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { GateProvider, useGate } from './contexts/GateContext';
 import {
   initialCampaigns,
   initialBusinesses,
@@ -37,30 +37,31 @@ const writeRoute = (route: '/' | '/app') => {
   } catch { /* noop */ }
 };
 
-// Root router: defers to AuthProvider for auth state.
+// Root router: defers to GateProvider for the password-wall session.
 export default function App() {
   return (
-    <AuthProvider>
+    <GateProvider>
       <AppRouter />
-    </AuthProvider>
+    </GateProvider>
   );
 }
 
 function AppRouter() {
-  const { user, loading } = useAuth();
+  const { unlocked, loading } = useGate();
   const [route, setRoute] = useState<'/' | '/app'>(() => readRoute());
 
   useEffect(() => {
     writeRoute(route);
   }, [route]);
 
-  // Bounce /app back to / if not authed.
+  // Bounce /app back to / if the gate is locked. The Landing page renders a
+  // "Continue to dashboard" button that flips to /app once the gate cookie
+  // is set, so a reload after entering the password works seamlessly.
   useEffect(() => {
-    if (route === '/app' && !user) {
-      try { localStorage.setItem('lunao_open_auth_on_load', '1'); } catch { /* noop */ }
+    if (route === '/app' && !unlocked) {
       setRoute('/');
     }
-  }, [route, user]);
+  }, [route, unlocked]);
 
   // While checking the session, show nothing (prevents flash of landing while authed).
   if (loading) {
@@ -74,15 +75,15 @@ function AppRouter() {
     );
   }
 
-  if (!user) {
+  if (!unlocked) {
     return <Landing />;
   }
 
-  return <DashboardApp user={user} />;
+  return <DashboardApp />;
 }
 
 // The original dashboard tree lives here, unmodified.
-function DashboardApp({ user }: { user: any }) {
+function DashboardApp() {
   const [activeTab, setActiveTab] = useState<SidebarTab>('dashboard');
   const [bouncingTab, setBouncingTab] = useState<string | null>(null);
 
@@ -136,8 +137,8 @@ function DashboardApp({ user }: { user: any }) {
     return () => mainEl.removeEventListener('scroll', handleScroll);
   }, []);
 
-  const [userName, setUserName] = useState<string>(user?.name || 'User');
-  const [userEmail, setUserEmail] = useState<string>(user?.email || '');
+  const [userName, setUserName] = useState<string>('Operator');
+  const [userEmail, setUserEmail] = useState<string>('operator@lunao.local');
   const [userPlan, setUserPlan] = useState<string>(() => {
     return localStorage.getItem('lunao_user_plan') || 'Free Plan';
   });
@@ -171,7 +172,7 @@ function DashboardApp({ user }: { user: any }) {
     (async () => {
       try {
         const { getCredits } = await import('./lib/pipelineClient');
-        const ownerKey = `user_${user.id}`;
+        const ownerKey = 'dashboard';
         const status = await getCredits(ownerKey, normalized);
         if (status.account) {
           setUserCredits(status.account.balance);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Nav } from './landing/sections/Nav';
 import { Hero } from './landing/sections/Hero';
 import { SocialProof } from './landing/sections/SocialProof';
@@ -12,28 +12,19 @@ import { Testimonials } from './landing/sections/Testimonials';
 import { CTV } from './landing/sections/CTV';
 import { FAQ } from './landing/sections/FAQ';
 import { Footer } from './landing/sections/Footer';
-import { AuthModal } from './landing/components/AuthModal';
 import { SectionDivider } from './landing/components/SectionDivider';
-import { useAuth } from './contexts/AuthContext';
 import './landing/index.css';
 
-const PLAN_ID_TO_LABEL: Record<string, string> = {
-  free: 'Free Plan',
-  starter: 'Starter Plan',
-  growth: 'Growth Plan',
-  pro: 'Pro Plan',
-  agency: 'Agency Plan',
-};
-
-// Google Client ID — set VITE_GOOGLE_CLIENT_ID in your .env file.
-// If not set, the Google button is hidden and only email/password auth is available.
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+// v2: there's no signup/login flow anymore — every "open the dashboard" CTA
+// just routes to /app. The server-side gate middleware will redirect to
+// /site-gate if the cookie isn't set. So users land on the password page,
+// enter the password, and the SPA dashboard takes over.
+function openDashboard() {
+  // Full nav (not router push) so the server gets a chance to 302 to /site-gate.
+  window.location.href = '/app';
+}
 
 export const Landing: React.FC = () => {
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('signup');
-  const [pendingPlan, setPendingPlan] = useState<string | undefined>(undefined);
-  const [pendingNiche, setPendingNiche] = useState<string | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   // Single IntersectionObserver toggles data-visible on .landing-fade elements.
@@ -64,48 +55,19 @@ export const Landing: React.FC = () => {
     return () => io.disconnect();
   }, []);
 
-  // If the visitor deep-linked to /app while unauthenticated, App.tsx sets
-  // this flag and bounces them back to /. Open the auth modal on mount.
-  useEffect(() => {
-    try {
-      if (localStorage.getItem('lunao_open_auth_on_load') === '1') {
-        localStorage.removeItem('lunao_open_auth_on_load');
-        setAuthMode('login');
-        setAuthOpen(true);
-      }
-    } catch { /* noop */ }
-  }, []);
-
-  const openAuth = useCallback((mode: 'login' | 'signup', opts?: { plan?: string; niche?: string }) => {
-    setAuthMode(mode);
-    setPendingPlan(opts?.plan);
-    setPendingNiche(opts?.niche);
-    setAuthOpen(true);
-  }, []);
-
-  const closeAuth = useCallback(() => setAuthOpen(false), []);
-
-  const handlePickPlan = useCallback((planId: string) => {
-    openAuth('signup', { plan: PLAN_ID_TO_LABEL[planId] ?? 'Free Plan' });
-  }, [openAuth]);
-
-  const handlePickNiche = useCallback((niche: string) => {
-    openAuth('signup', { niche });
-  }, [openAuth]);
-
   return (
     <div ref={rootRef} className="landing-root">
-      <Nav onOpenAuth={(mode) => openAuth(mode)} />
+      <Nav onOpenDashboard={openDashboard} />
 
       <main id="main-content-flow" className="pt-16 md:pt-20">
         <SectionDivider withMark />
-        <Hero onOpenAuth={() => openAuth('signup')} />
+        <Hero onOpenDashboard={openDashboard} />
 
         <SectionDivider withMark />
         <SocialProof />
 
         <SectionDivider withMark />
-        <UseCases onPickNiche={handlePickNiche} />
+        <UseCases onPickNiche={openDashboard} />
 
         <SectionDivider withMark />
         <PainPoints />
@@ -120,29 +82,19 @@ export const Landing: React.FC = () => {
         <Benefits />
 
         <SectionDivider withMark />
-        <Pricing onPickPlan={handlePickPlan} />
+        <Pricing onPickPlan={openDashboard} />
 
         <SectionDivider withMark />
         <Testimonials />
 
         <SectionDivider withMark />
-        <CTV onOpenAuth={() => openAuth('signup')} />
+        <CTV onOpenDashboard={openDashboard} />
 
         <SectionDivider withMark />
         <FAQ />
       </main>
 
-      <Footer onOpenAuth={openAuth} />
-
-      <AuthModal
-        open={authOpen}
-        initialMode={authMode}
-        initialPlan={pendingPlan}
-        initialNiche={pendingNiche}
-        onClose={closeAuth}
-        onAuthed={() => setAuthOpen(false)}
-        googleClientId={GOOGLE_CLIENT_ID}
-      />
+      <Footer onOpenDashboard={openDashboard} />
     </div>
   );
 };

@@ -6,7 +6,7 @@ interface UseCasesProps {
   onPickNiche: (niche: string) => void;
 }
 
-export const UseCases: React.FC<UseCasesProps> = ({ onPickNiche }) => {
+export const UseCases: React.FC<UseCasesProps> = ({ onPickNiche: onOpenDashboard }) => {
   return (
     <section
       id="use-cases"
@@ -47,7 +47,7 @@ export const UseCases: React.FC<UseCasesProps> = ({ onPickNiche }) => {
                 </p>
                 <button
                   type="button"
-                  onClick={() => onPickNiche(c.nicheKey)}
+                  onClick={() => onOpenDashboard(c.nicheKey)}
                   className="font-sans text-[12px] font-medium text-accent hover:text-accent-hover flex items-center gap-1"
                 >
                   {useCasesCopy.cta}

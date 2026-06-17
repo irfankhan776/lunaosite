@@ -69,21 +69,12 @@ import {
 } from './lib/campaigns.js';
 import { sendSms, toE164, countSegments } from './lib/telnyx.js';
 import {
-  makeSessionToken,
-  verifySessionToken,
-  hashPassword,
-  verifyPassword,
-  setSessionCookie,
-  clearSessionCookie,
-  parseSessionCookie,
-  createUser,
-  findUserByEmail,
-  findUserByGoogleId,
-  findUserById,
-  updateUserGoogleId,
-  publicUser,
-} from './lib/auth.js';
-import { googleOAuth } from './lib/config.js';
+  gateProtected,
+  handleSiteGateLogin,
+  handleSiteGateLogout,
+  handleSiteGateStatus,
+  gateHealth,
+} from './lib/siteGate.js';
 
 const app = express();
 // Trust the first proxy hop (Railway / Cloudflare) so `req.secure`,
@@ -155,6 +146,7 @@ app.get('/api/health', async (_req, res) => {
       health.telnyx.error = err.message;
     }
   }
+  health.gate = gateHealth();
   res.json(health);
 });
 
@@ -460,148 +452,30 @@ app.post('/api/sites/:slug/addons', async (req, res) => {
   }
 });
 
-// ---- User Auth (JWT cookie-based, cross-device) ---------------------------
+// ---- Site Gate (single hardcoded password unlocks the dashboard) ----------
+// Replaces the previous email/Google/bcrypt/JWT auth flow. The gate sets a
+// signed cookie (12h TTL) which is the only "session" the dashboard needs.
+// See server/lib/siteGate.js for the full implementation.
 
-// Register with email + password.
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { email, password, name } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ ok: false, error: 'Email and password are required.' });
-    }
-    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ ok: false, error: 'Invalid email address.' });
-    }
-    if (typeof password !== 'string' || password.length < 8) {
-      return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters.' });
-    }
+app.post('/api/site-gate', handleSiteGateLogin);
+app.post('/api/site-gate/logout', handleSiteGateLogout);
+app.get('/api/site-gate/status', handleSiteGateStatus);
 
-    const existing = findUserByEmail(email);
-    if (existing) {
-      return res.status(409).json({ ok: false, error: 'An account with this email already exists.' });
-    }
-
-    const passwordHash = await hashPassword(password);
-    const user = createUser({ email, name: name || '', passwordHash });
-    const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(req, res, token);
-
-    res.status(201).json({ ok: true, user: publicUser(user) });
-  } catch (err) {
-    console.error('[/api/auth/register]', err);
-    res.status(500).json({ ok: false, error: 'Registration failed. Please try again.' });
-  }
-});
-
-// Login with email + password.
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    if (!email || !password) {
-      return res.status(400).json({ ok: false, error: 'Email and password are required.' });
-    }
-
-    const user = findUserByEmail(email);
-    if (!user || !user.password_hash) {
-      return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
-    }
-
-    const valid = await verifyPassword(password, user.password_hash);
-    if (!valid) {
-      return res.status(401).json({ ok: false, error: 'Invalid email or password.' });
-    }
-
-    const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(req, res, token);
-
-    res.json({ ok: true, user: publicUser(user) });
-  } catch (err) {
-    console.error('[/api/auth/login]', err);
-    res.status(500).json({ ok: false, error: 'Login failed. Please try again.' });
-  }
-});
-
-// Exchange a Google ID token for a server session cookie.
-// Body: { googleToken: string }  — the token from the Google Sign-In SDK.
-app.post('/api/auth/google', async (req, res) => {
-  try {
-    const { googleToken } = req.body || {};
-    if (!googleToken) {
-      return res.status(400).json({ ok: false, error: 'googleToken is required.' });
-    }
-
-    if (!googleOAuth.enabled) {
-      return res.status(503).json({ ok: false, error: 'Google Sign-In is not configured.' });
-    }
-
-    // Verify the token with Google.
-    const googleRes = await fetch('https://oauth2.googleapis.com/tokeninfo', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ access_token: googleToken }),
-    });
-
-    if (!googleRes.ok) {
-      return res.status(401).json({ ok: false, error: 'Invalid Google token.' });
-    }
-
-    const payload = await googleRes.json();
-    const { email, name, picture, sub: googleId } = payload;
-
-    let user = findUserByGoogleId(googleId);
-    if (!user) {
-      // First time: create account. If email already exists without google_id, link it.
-      const byEmail = findUserByEmail(email);
-      if (byEmail && !byEmail.google_id) {
-        updateUserGoogleId(byEmail.id, googleId, picture);
-        user = findUserById(byEmail.id);
-      } else if (!byEmail) {
-        user = createUser({ email, name: name || '', googleId, avatarUrl: picture });
-      } else {
-        return res.status(409).json({ ok: false, error: 'An account with this email already exists. Please log in with your password.' });
-      }
-    }
-
-    const token = makeSessionToken(user.id, user.email);
-    setSessionCookie(req, res, token);
-
-    res.json({ ok: true, user: publicUser(user) });
-  } catch (err) {
-    console.error('[/api/auth/google]', err);
-    res.status(500).json({ ok: false, error: 'Google sign-in failed. Please try again.' });
-  }
-});
-
-// Logout: clear the session cookie.
-app.post('/api/auth/logout', (req, res) => {
-  clearSessionCookie(req, res);
-  res.json({ ok: true });
-});
-
-// Get the currently logged-in user from the session cookie.
-app.get('/api/auth/me', async (req, res) => {
-  const token = parseSessionCookie(req);
-  if (!token) {
-    return res.status(401).json({ ok: false, error: 'Not authenticated.' });
-  }
-  const payload = await verifySessionToken(token);
-  if (!payload) {
-    clearSessionCookie(req, res);
-    return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
-  }
-  const user = findUserById(Number(payload.sub));
-  if (!user) {
-    clearSessionCookie(req, res);
-    return res.status(401).json({ ok: false, error: 'User not found.' });
-  }
-  res.json({ ok: true, user: publicUser(user) });
-});
+// Protect everything behind the gate. The site-gate routes, /api/health,
+// /api/webhooks/telnyx, /sites/* static, and the static /assets/* are
+// excluded inside gateProtected() so we never lock ourselves out.
+const GATE_PROTECTED_PREFIXES = [
+  '/dashboard', '/messages', '/campaigns', '/credits', '/bookings',
+  '/sites', '/templates', '/templates-raw', '/ai', '/owner',
+];
+app.use(gateProtected(GATE_PROTECTED_PREFIXES));
 
 // Diagnostic: confirm cookies are flowing in both directions. No secrets, no
 // token values — just booleans + config flags. Safe to leave in for now.
 app.get('/api/_diag/cookies', (req, res) => {
   const hasInbound = Boolean(req.headers.cookie);
-  const hasSession = Boolean(parseSessionCookie(req));
+  const gateCookieName = 'lunao_site_gate';
+  const hasGate = Boolean(req.cookies?.[gateCookieName]);
   let hasOutbound = false;
   res.cookie('lunao_diag', '1', {
     httpOnly: true,
@@ -616,7 +490,7 @@ app.get('/api/_diag/cookies', (req, res) => {
   res.json({
     ok: true,
     inboundCookieHeader: hasInbound,
-    inboundSessionCookie: hasSession,
+    inboundGateCookie: hasGate,
     outboundSetCookie: hasOutbound,
     reqProtocol: req.protocol,
     reqSecure: req.secure,
@@ -628,31 +502,41 @@ app.get('/api/_diag/cookies', (req, res) => {
   });
 });
 
-// Middleware: require an authenticated session. Attaches `req.userId` for use
-// in downstream handlers. Skips if X-Owner-Key is present (legacy ownerKey path
-// so existing localStorage-based clients still work while migrating).
+// Middleware: require an authenticated dashboard session.
+//
+// In v2 the gate cookie (lunao_site_gate) is the only "session" we have —
+// there is no per-user table anymore. Any caller that already passed the
+// gateProtected() middleware is considered authenticated. The legacy
+// `ownerKey` header/query/body is still honored for back-compat with the
+// localStorage-based dashboard and the Owner App's dev-mode fallback.
 async function authenticate(req, res, next) {
   const legacyKey = req.headers['x-owner-key'] || req.query.ownerKey || req.body?.ownerKey;
   if (legacyKey) {
     req.ownerKey = String(legacyKey);
     return next();
   }
-  const token = parseSessionCookie(req);
-  if (!token) {
-    return res.status(401).json({ ok: false, error: 'Not authenticated.' });
-  }
-  const payload = await verifySessionToken(token);
-  if (!payload) {
-    clearSessionCookie(req, res);
-    return res.status(401).json({ ok: false, error: 'Session expired. Please log in again.' });
-  }
-  req.userId = Number(payload.sub);
-  req.userEmail = payload.email;
+  // gateProtected() sits in front of every API route that uses authenticate.
+  // If we got here, the cookie is valid. Stamp req.userKey for handlers.
+  req.userKey = 'dashboard';
+  req.ownerKey = req.ownerKey || 'dashboard';
   next();
 }
 
 // Serve the locally compiled sites (dry-run live preview).
 app.use('/sites', express.static(SITES_DIR, { extensions: ['html'] }));
+
+// Serve the gate page (public/site-gate.html) — small standalone page, served
+// directly from source so it works in both dev and prod. The gate middleware
+// redirects unauthenticated browser requests here.
+app.get('/site-gate', (_req, res) => {
+  const gatePath = path.join(ROOT_DIR, 'public', 'site-gate.html');
+  if (fs.existsSync(gatePath)) {
+    return res.sendFile(gatePath);
+  }
+  // Fallback if the file is missing — keep the gate working rather than
+  // throwing a confusing 404 to the user.
+  res.status(500).send('Site gate page missing. Please redeploy.');
+});
 
 // In production, serve the built frontend.
 const distDir = path.join(ROOT_DIR, 'dist');
@@ -1150,6 +1034,76 @@ app.get('/api/owner/sms', authenticate, (req, res) => {
     if (!ownerKey) return res.status(400).json({ ok: false, error: 'ownerKey is required' });
     const limit = parseInt(req.query.limit, 10) || 100;
     res.json({ ok: true, sms: listSmsForOwner(ownerKey, limit) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Send a one-off SMS from the dashboard Messages pane. Mirrors what the
+// campaign runner does per-lead: writes an sms_logs row, charges 3 credits,
+// calls Telnyx, refunds on failure, and updates status as the webhook lands.
+app.post('/api/owner/sms', authenticate, async (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query.ownerKey || 'dashboard').trim();
+    const { to, text, leadName } = req.body || {};
+    const dest = toE164(to);
+    if (!dest) return res.status(400).json({ ok: false, error: 'Invalid destination phone' });
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ ok: false, error: 'text is required' });
+    }
+    if (text.length > 1600) {
+      return res.status(400).json({ ok: false, error: 'text exceeds 1600 chars (Telnyx limit)' });
+    }
+
+    // Credit gate: one-off sends cost 3 credits (same as campaign SMS).
+    const balance = checkBalance(ownerKey);
+    if (balance.available < 3) {
+      return res.status(402).json({ ok: false, error: 'Insufficient credits', needed: 3, available: balance.available });
+    }
+    const chargeResult = charge(ownerKey, 3, 'oneoff_sms_charge', { to: dest, leadName: leadName || null });
+
+    // Persist the log row up front so the UI can show the message immediately.
+    const segments = countSegments(text);
+    const row = logSmsAttempt({
+      campaignId: null,
+      leadId: null,
+      ownerKey,
+      toNumber: dest,
+      fromNumber: telnyx.from || null,
+      body: text,
+      status: 'queued',
+      telnyxId: null,
+      errorCode: null,
+      errorMessage: null,
+      segmentCount: segments,
+      costCredits: 3,
+    });
+
+    if (!telnyx.enabled) {
+      // Master switch off — keep the row, refund the credits.
+      updateSmsStatus({ id: row.id, status: 'simulated' });
+      refund(ownerKey, 3, 'oneoff_sms_simulated_refund', { smsId: row.id });
+      return res.json({ ok: true, status: 'simulated', smsId: row.id });
+    }
+
+    try {
+      const result = await sendSms({ to: dest, text });
+      updateSmsStatus({
+        id: row.id,
+        status: result.status || 'sent',
+        telnyxId: result.id || null,
+        errorCode: result.errorCode || null,
+        errorMessage: result.errorMessage || null,
+      });
+      if (result.status === 'failed') {
+        refund(ownerKey, 3, 'oneoff_sms_failed_refund', { smsId: row.id });
+      }
+      return res.json({ ok: true, status: result.status || 'sent', smsId: row.id, telnyxId: result.id || null });
+    } catch (err) {
+      updateSmsStatus({ id: row.id, status: 'failed', errorMessage: err.message });
+      refund(ownerKey, 3, 'oneoff_sms_failed_refund', { smsId: row.id });
+      return res.status(502).json({ ok: false, error: err.message, smsId: row.id });
+    }
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

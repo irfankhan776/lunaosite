@@ -211,7 +211,14 @@ The API client maintains an in-memory `authToken`. Call `setAuthToken(token)` af
 
 ## 6. Authentication (`lib/auth.ts` + `lib/AuthContext.tsx`)
 
-### Invite-code login flow
+### v2: Site Gate (single hardcoded password)
+
+v2 replaces the email/Google/bcrypt/JWT auth flow with a single hardcoded
+password gate. The server (`server/lib/siteGate.js`) sets a signed cookie
+(`lunao_site_gate`, 12-hour TTL) that gates every dashboard API + page.
+There is no signup, no login, no user table. Password is `$Khan1234455`.
+
+### Invite-code login flow (legacy — retained for the Expo Owner App only)
 
 1. User enters a code like `LUNAO-ABCD-EFGH` on the login screen
 2. Code is trimmed and uppercased

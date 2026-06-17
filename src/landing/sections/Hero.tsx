@@ -3,10 +3,10 @@ import { ArrowRight, ExternalLink, Check } from 'lucide-react';
 import { heroCopy } from '../lib/copy';
 
 interface HeroProps {
-  onOpenAuth: () => void;
+  onOpenDashboard: () => void;
 }
 
-export const Hero: React.FC<HeroProps> = ({ onOpenAuth }) => {
+export const Hero: React.FC<HeroProps> = ({ onOpenDashboard }) => {
   return (
     <section
       id="top"
@@ -29,7 +29,7 @@ export const Hero: React.FC<HeroProps> = ({ onOpenAuth }) => {
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               type="button"
-              onClick={onOpenAuth}
+              onClick={onOpenDashboard}
               className="h-12 px-5 rounded-md bg-accent text-white font-sans text-sm font-medium hover:bg-accent-hover transition-colors flex items-center justify-center gap-2"
             >
               {heroCopy.ctaPrimary}

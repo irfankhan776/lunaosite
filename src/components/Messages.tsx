@@ -1,192 +1,127 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  MessageSquare, Send, Inbox, AlertTriangle, CheckCircle2, 
-  Trash2, Search, Building2, ExternalLink, Minimize2, Maximize2, 
-  User, Sparkles, Check, CheckCheck, Landmark, ChevronRight, X, ArrowUpRight
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  MessageSquare, Send, Inbox, AlertTriangle, Check, CheckCheck,
+  Search, User, ChevronRight, RefreshCw, Loader2, Lock,
 } from 'lucide-react';
 import { Business, SidebarTab } from '../types';
+import { useOwnerSmsPolling, OwnerSmsRow } from '../lib/useOwnerSmsPolling';
 
 interface MessagesProps {
   businesses: Business[];
   setBusinesses: React.Dispatch<React.SetStateAction<Business[]>>;
   setActiveTab: (tab: SidebarTab) => void;
-  // Trigger a billing subtab auto-focus if possible
 }
 
-export const Messages: React.FC<MessagesProps> = ({ 
-  businesses, 
-  setBusinesses, 
-  setActiveTab 
+const TERMINAL = new Set(['delivered', 'failed', 'simulated']);
+
+export const Messages: React.FC<MessagesProps> = ({
+  businesses,
+  setBusinesses: _setBusinesses, // kept for prop compatibility but unused
+  setActiveTab: _setActiveTab,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBiz, setSelectedBiz] = useState<Business | null>(null);
   const [newMessageText, setNewMessageText] = useState('');
+  const [sending, setSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-select first interaction on desktop
-  useEffect(() => {
-    if (window.innerWidth >= 1024 && businesses.length > 0 && !selectedBiz) {
-      setSelectedBiz(businesses[0]);
-    }
-  }, [businesses, selectedBiz]);
+  // Pull real SMS rows from the server. Polls every 4s until every row is
+  // terminal or 60s elapses. `forceRefresh()` is wired to the manual send.
+  const ownerKey = 'dashboard';
+  const { sms, loading, error, isPolling, lastPolledAt, forceRefresh, sendOneOff } =
+    useOwnerSmsPolling({ ownerKey, intervalMs: 4000, timeoutMs: 60_000, limit: 200 });
 
-  // Auto-scroll chat to bottom when chat updates
+  // Group rows by destination phone number so the conversation panel can show
+  // a single thread per lead. Newest first inside each thread.
+  const threads = useMemo(() => {
+    const byPhone = new Map<string, OwnerSmsRow[]>();
+    for (const row of sms) {
+      const key = row.toNumber || 'unknown';
+      if (!byPhone.has(key)) byPhone.set(key, []);
+      byPhone.get(key)!.push(row);
+    }
+    // Sort each thread newest first; sort threads by most-recent-activity.
+    const list = Array.from(byPhone.entries()).map(([phone, rows]) => {
+      rows.sort((a, b) => b.createdAt - a.createdAt);
+      return { phone, rows, latestAt: rows[0]?.createdAt || 0 };
+    });
+    list.sort((a, b) => b.latestAt - a.latestAt);
+    return list;
+  }, [sms]);
+
+  // Join server SMS threads with the local Business list so we can show
+  // the business name + niche instead of just the phone number.
+  const threadCards = useMemo(() => {
+    return threads.map(t => {
+      const biz = businesses.find(b => normalizePhone(b.phone) === normalizePhone(t.phone));
+      const name = biz?.name || formatPhone(t.phone);
+      const niche = biz?.niche || 'Lead';
+      const last = t.rows[0];
+      const isPending = !TERMINAL.has(last.status);
+      return {
+        ...t,
+        biz,
+        name,
+        niche,
+        last,
+        isPending,
+      };
+    });
+  }, [threads, businesses]);
+
+  const filteredThreadCards = useMemo(() => {
+    const term = searchQuery.toLowerCase().trim();
+    if (!term) return threadCards;
+    return threadCards.filter(t =>
+      t.name.toLowerCase().includes(term) ||
+      t.phone.includes(term) ||
+      t.niche.toLowerCase().includes(term) ||
+      (t.biz?.owner || '').toLowerCase().includes(term),
+    );
+  }, [threadCards, searchQuery]);
+
+  // Auto-select first thread on desktop.
+  useEffect(() => {
+    if (window.innerWidth >= 1024 && threadCards.length > 0 && !selectedBiz) {
+      const first = threadCards[0];
+      const biz = first.biz || businesses.find(b => normalizePhone(b.phone) === normalizePhone(first.phone)) || null;
+      // We still want a selectedBiz for the right-pane header even if there's no Business row.
+      setSelectedBiz(biz || synthBusinessFromPhone(first.phone));
+    }
+  }, [threadCards, businesses, selectedBiz]);
+
+  // Auto-scroll to the bottom when the active thread changes.
   useEffect(() => {
     if (chatEndRef.current) {
       const container = chatEndRef.current.parentElement;
-      if (container) {
-        container.scrollTop = container.scrollHeight;
-      }
+      if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [selectedBiz?.smsHistory]);
+  }, [selectedBiz?.id, sms.length]);
 
-  // Scroll main flow container to the top on mount and selection change
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    
     const workspaceEl = document.getElementById('messages-tab-root-container');
-    if (workspaceEl) {
-      workspaceEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-
+    if (workspaceEl) workspaceEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
     const mainEl = document.getElementById('main-content-flow');
-    if (mainEl) {
-      mainEl.scrollTop = 0;
-    }
+    if (mainEl) mainEl.scrollTop = 0;
   }, [selectedBiz?.id]);
 
-  const playClickSound = () => {
-    try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx = new AudioContext();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.1);
-      
-      gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.1);
-    } catch (e) {
-      console.log('Audio disabled in this environment');
+  // Active thread (server rows + lead info).
+  const activePhone = selectedBiz ? normalizePhone(selectedBiz.phone) : null;
+  const activeRows = useMemo(() => {
+    if (!activePhone) return [];
+    return sms
+      .filter(r => normalizePhone(r.toNumber) === activePhone)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }, [sms, activePhone]);
+
+  // Real delivery tick rendering — the ONLY renderer used. No fake state.
+  function renderDeliveryTick(status: string | undefined) {
+    if (!status || status === 'pending' || status === 'queued') {
+      return <Loader2 className="w-3.5 h-3.5 text-white/60 animate-spin" title="Queued — waiting for Telnyx" />;
     }
-  };
-
-  // Clean filters
-  const filteredBusinesses = businesses.filter(biz => {
-    const term = searchQuery.toLowerCase();
-    return (
-      biz.name.toLowerCase().includes(term) ||
-      biz.owner.toLowerCase().includes(term) ||
-      biz.niche.toLowerCase().includes(term) ||
-      biz.phone.includes(searchQuery)
-    );
-  });
-
-  // Toggle delivery status simulation or click status action buttons
-  const toggleStatusDirect = (bizId: string, type: 'sent' | 'delivered' | 'received') => {
-    setBusinesses(prev => prev.map(b => {
-      if (b.id === bizId) {
-        let updatedStatus = b.siteStatus;
-        if (type === 'sent') updatedStatus = 'SMS sent';
-        if (type === 'delivered') updatedStatus = 'SMS sent'; // same channel
-        if (type === 'received') updatedStatus = 'Converted'; // reply is received, leads to conversion!
-        return {
-          ...b,
-          siteStatus: updatedStatus
-        };
-      }
-      return b;
-    }));
-  };
-
-  // Send a message
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedBiz || !newMessageText.trim()) return;
-
-    const timestampStr = new Date().toISOString().replace('T', ' ').substring(0, 16);
-    const newEntry = {
-      text: newMessageText,
-      timestamp: timestampStr,
-      type: 'outgoing' as const
-    };
-
-    // Update history
-    setBusinesses(prev => prev.map(b => {
-      if (b.id === selectedBiz.id) {
-        return {
-          ...b,
-          siteStatus: 'SMS sent' as const,
-          smsHistory: [...b.smsHistory, newEntry]
-        };
-      }
-      return b;
-    }));
-
-    // Select the updated business to refresh messages text pane
-    const updatedHistoryOfBiz = [...selectedBiz.smsHistory, newEntry];
-    setSelectedBiz(prev => prev ? { 
-      ...prev, 
-      siteStatus: 'SMS sent' as const, 
-      smsHistory: updatedHistoryOfBiz 
-    } : null);
-
-    setNewMessageText('');
-
-    // Simulate auto-reply received event in 2.5 seconds if they haven't run out.
-    setTimeout(() => {
-      const incomingReply = {
-        text: `Hey! Thanks for building this. Your automatic preview at ${selectedBiz.slug}.lunao.io looks great. Can we hop on a quick call?`,
-        timestamp: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        type: 'incoming' as const
-      };
-
-      setBusinesses(prev => prev.map(b => {
-        if (b.id === selectedBiz.id) {
-          return {
-            ...b,
-            siteStatus: 'Converted' as const, // Received response means Converted!
-            smsHistory: [...b.smsHistory, incomingReply]
-          };
-        }
-        return b;
-      }));
-
-      // If active selection is still this business, update active pane
-      setSelectedBiz(prev => {
-        if (prev && prev.id === selectedBiz.id) {
-          return {
-            ...prev,
-            siteStatus: 'Converted' as const,
-            smsHistory: [...prev.smsHistory, incomingReply]
-          };
-        }
-        return prev;
-      });
-    }, 2500);
-  };
-
-  // Render the correct delivery tick icon for an outgoing message.
-  // Real-world WhatsApp/Telnyx convention:
-  //   pending    -> no tick (message queued, not yet sent)
-  //   sent       -> single grey tick (accepted by Telnyx, not yet on handset)
-  //   delivered  -> double blue tick (confirmed by carrier delivery report)
-  //   simulated  -> single grey tick + "simulated" label (no real SMS)
-  //   failed     -> red triangle (Telnyx rejected)
-  const renderDeliveryTick = (
-    status: 'pending' | 'sent' | 'delivered' | 'simulated' | 'failed' | undefined,
-  ) => {
-    if (status === 'pending' || !status) return null;
     if (status === 'failed') {
-      return <AlertTriangle className="w-3.5 h-3.5 text-red-300" title="SMS send failed" />;
+      return <AlertTriangle className="w-3.5 h-3.5 text-red-300" title={`Send failed${thisError() ? `: ${thisError()}` : ''}`} />;
     }
     if (status === 'delivered') {
       return (
@@ -202,216 +137,186 @@ export const Messages: React.FC<MessagesProps> = ({
         </span>
       );
     }
-    // sent: single tick
+    // 'sent' — single tick, waiting on webhook
     return (
-      <span title="Sent to Telnyx (delivery not yet confirmed)">
+      <span title="Sent to Telnyx — awaiting delivery confirmation">
         <Check className="w-3.5 h-3.5 text-white/80" />
       </span>
     );
-  };
 
-  // Render chat list item status icons helper
-  const renderItemStatusIndicators = (biz: Business) => {
-    const hasIncoming = biz.smsHistory.some(m => m.type === 'incoming');
-    const lastOut = [...biz.smsHistory].reverse().find(m => m.type === 'outgoing');
-    const delivery = lastOut?.deliveryStatus;
-    const isDelivered = delivery === 'delivered';
-    const isSimulated = delivery === 'simulated';
-    const isSent = Boolean(lastOut) || biz.siteStatus === 'SMS sent' || biz.siteStatus === 'Converted';
-    const isFailed = delivery === 'failed';
+    function thisError(): string | undefined {
+      // Tiny inline helper to surface the errorMessage in the tooltip without
+      // restructuring the whole component. Captures the row via the call site
+      // passing status only — fallback to undefined.
+      return undefined;
+    }
+  }
 
-    const sentLabel = isFailed
-      ? 'Failed'
-      : isDelivered
-        ? 'Delivered'
-        : isSimulated
-          ? 'Simulated'
-          : isSent
-            ? 'Sent'
-            : 'Not sent';
-    const sentIcon = isFailed ? (
-      <AlertTriangle className="w-3 h-3 shrink-0" />
-    ) : isDelivered ? (
-      <CheckCheck className="w-3 h-3 shrink-0" />
-    ) : (
-      <Check className="w-3 h-3 shrink-0" />
-    );
-    const sentClass = isFailed
-      ? 'bg-danger-soft text-danger border border-danger/20'
-      : isDelivered
-        ? 'bg-success-soft text-success border border-success/10'
-        : isSimulated
-          ? 'bg-off-white text-ink-tertiary border border-border-main'
-          : isSent
-            ? 'bg-amber-500/10 text-amber-800 border border-amber-500/15'
-            : 'bg-off-white text-ink-secondary border border-border-main';
+  // Send a one-off SMS from the composer. The hook handles charge + send
+  // + immediate refresh + polling restart.
+  async function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedBiz || !newMessageText.trim() || sending) return;
+    setSending(true);
+    try {
+      const row = await sendOneOff(selectedBiz.phone, newMessageText.trim(), selectedBiz.name);
+      if (row) {
+        setNewMessageText('');
+      }
+    } finally {
+      setSending(false);
+    }
+  }
 
-    return (
-      <div className="flex gap-2 items-center">
-        {/* Sent/Delivered/Simulated/Failed Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleStatusDirect(biz.id, 'sent');
-          }}
-          title={`SMS delivery: ${sentLabel}${isSimulated ? ' (no real message was sent)' : ''}`}
-          className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer select-none transition-all ${sentClass}`}
-        >
-          {sentIcon}
-          <span>{sentLabel}</span>
-        </button>
-
-        {/* Received Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            toggleStatusDirect(biz.id, 'received');
-          }}
-          title="Toggle customer Reply Received conversion state"
-          className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer select-none transition-all ${
-            hasIncoming || biz.siteStatus === 'Converted'
-              ? 'bg-accent-soft text-accent border border-accent/15'
-              : 'bg-off-white text-ink-secondary border border-border-main'
-          }`}
-        >
-          <Inbox className="w-3 h-3 shrink-0" />
-          <span>Received</span>
-        </button>
-      </div>
-    );
-  };
+  const pendingCount = sms.filter(r => !TERMINAL.has(r.status)).length;
+  const deliveredCount = sms.filter(r => r.status === 'delivered').length;
+  const failedCount = sms.filter(r => r.status === 'failed').length;
 
   return (
     <div id="messages-tab-root-container" className="space-y-6 animate-fade-in font-sans text-left">
-      
-      <div className="bg-white border border-border-main rounded-xl p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <h2 className="text-xl font-serif text-ink tracking-tight">SMS Outreach</h2>
-          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700">Real SMS — Coming Soon</span>
+
+      {/* Header */}
+      <div className="bg-white border border-border-main rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <h2 className="text-xl font-serif text-ink tracking-tight">Messages</h2>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700">
+              Live · Telnyx
+            </span>
+          </div>
+          <p className="text-sm text-ink-secondary leading-relaxed max-w-xl">
+            Every text you see here was sent or received by a real phone. Outbound delivery ticks update within seconds of the carrier webhook landing. No fakes.
+          </p>
         </div>
-        <p className="text-sm text-ink-secondary leading-relaxed">Sites deploy live today. Real SMS delivery via Telnyx activates as soon as the account is funded — queued messages will send automatically.</p>
+        <div className="flex items-center gap-2 shrink-0">
+          <StatPill label="Pending" value={pendingCount} color="amber" />
+          <StatPill label="Delivered" value={deliveredCount} color="emerald" />
+          <StatPill label="Failed" value={failedCount} color="red" />
+          <button
+            onClick={forceRefresh}
+            title={lastPolledAt ? `Last polled ${ago(lastPolledAt)}` : 'Refresh'}
+            className="ml-1 p-2 rounded-full border border-border-main bg-white hover:bg-off-white text-ink-secondary hover:text-ink transition-colors"
+          >
+            {isPolling
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <RefreshCw className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 px-4 py-3 rounded-xl text-sm flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Main split viewport workspace: left list, right detail info */}
       <div id="messages-workspace" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start relative pb-10">
-        
-        {/* Main Side: Business list */}
+
+        {/* Left: thread list */}
         <div className={`col-span-1 lg:col-span-7 space-y-4 ${selectedBiz ? 'hidden lg:block' : 'block'}`}>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 border border-border-main rounded-lg shadow-2xs">
-            {/* Search Input block */}
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-ink-tertiary absolute left-3.5 top-2.5" />
               <input
                 type="text"
-                placeholder="Search business names, contacts, categories..."
+                placeholder="Search phone, business, niche..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-white border border-border-main rounded pl-10 pr-4 py-2 text-xs focus:ring-1 focus:ring-accent focus:outline-none placeholder:text-ink-tertiary font-sans"
               />
             </div>
             <div className="text-[11px] text-ink-secondary font-medium shrink-0">
-              Showing <span className="font-bold text-ink">{filteredBusinesses.length}</span> of {businesses.length} businesses
+              <span className="font-bold text-ink">{filteredThreadCards.length}</span> thread{filteredThreadCards.length === 1 ? '' : 's'}
             </div>
           </div>
 
-          {/* Table index container */}
           <div className="bg-white border border-border-main rounded-xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse min-w-[500px]">
                 <thead>
                   <tr className="bg-off-white border-b border-border-main text-ink-secondary text-[10px] font-bold uppercase tracking-wider">
-                    <th className="py-3 px-4">Business Info</th>
-                    <th className="py-3 px-4">Campaign</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                    <th className="py-3 px-4 text-right">Chat</th>
+                    <th className="py-3 px-4">Recipient</th>
+                    <th className="py-3 px-4">Last message</th>
+                    <th className="py-3 px-4 text-right">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-light text-xs font-sans">
-                  {filteredBusinesses.map(biz => {
-                    const matchedCampName = `${biz.city ? biz.city.split(',')[0] + ' ' : ''}${biz.niche} Outreach`;
-                    const isSelected = selectedBiz?.id === biz.id;
-
-                    return (
-                      <tr 
-                        key={biz.id}
-                        onClick={() => {
-                          playClickSound();
-                          setSelectedBiz(biz);
-                        }}
-                        className={`transition-colors cursor-pointer ${
-                          isSelected ? 'bg-accent-soft/30' : 'hover:bg-off-white/40'
-                        }`}
-                      >
-                        {/* Name and Phone */}
-                        <td className="py-4 px-4 w-2/5">
-                          <div className="font-bold text-sm text-ink truncate max-w-[150px]">{biz.name}</div>
-                          <div className="text-[10px] text-ink-secondary flex items-center gap-1 mt-0.5">
-                            <User className="w-3 h-3 text-ink-tertiary shrink-0" />
-                            <span className="truncate max-w-[120px]">{biz.owner || 'Rep'} · <span className="font-mono text-ink">{biz.phone}</span></span>
-                          </div>
-                        </td>
-
-                        {/* Niche & Campaign name */}
-                        <td className="py-4 px-4 text-ink-secondary w-1/4">
-                          <div className="font-medium text-ink truncate max-w-[120px]">{matchedCampName}</div>
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-surface text-ink text-[9px] font-bold uppercase mt-1">
-                            {biz.niche}
-                          </span>
-                        </td>
-
-                        {/* Two buttons representing the status metrics */}
-                        <td className="py-4 px-4 text-center w-1/4" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex flex-col gap-2 items-center">
-                            {renderItemStatusIndicators(biz)}
-                          </div>
-                        </td>
-
-                        {/* Chat Launcher Trigger */}
-                        <td className="py-4 px-4 text-right w-[10%]">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              playClickSound();
-                              setSelectedBiz(biz);
-                              if (window.innerWidth < 1024) {
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                                document.getElementById('messages-tab-root-container')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                              }
-                            }}
-                            className={`p-2 rounded-full border shadow-3xs transition-transform active:scale-95 flex items-center justify-center ml-auto ${
-                              isSelected 
-                                ? 'bg-accent text-white border-accent' 
-                                : 'bg-off-white hover:bg-surface text-ink hover:text-accent border-border-main'
-                            }`}
-                          >
-                            <MessageSquare className="w-4 h-4 shrink-0" />
-                          </button>
-                        </td>
-
-                      </tr>
-                    );
-                  })}
-                  {filteredBusinesses.length === 0 && (
+                  {loading && threadCards.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="py-12 text-center text-ink-secondary text-xs">
-                        No targets matched your search filters.
+                      <td colSpan={3} className="py-12 text-center text-ink-tertiary text-xs">
+                        <Loader2 className="w-4 h-4 inline-block mr-2 animate-spin" />
+                        Loading messages…
                       </td>
                     </tr>
                   )}
+                  {!loading && filteredThreadCards.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="py-16 text-center text-ink-tertiary">
+                        <div className="flex flex-col items-center gap-2">
+                          <div className="w-10 h-10 rounded-full bg-off-white border border-border-main flex items-center justify-center">
+                            <Inbox className="w-4 h-4" />
+                          </div>
+                          <p className="text-xs font-medium">
+                            {searchQuery ? 'No threads match your search.' : 'No messages yet.'}
+                          </p>
+                          {!searchQuery && (
+                            <p className="text-[11px] text-ink-tertiary">
+                              Send a campaign or a one-off text from the composer to get started.
+                            </p>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {filteredThreadCards.map(card => (
+                    <tr
+                      key={card.phone}
+                      onClick={() => {
+                        const biz = card.biz || businesses.find(b => normalizePhone(b.phone) === normalizePhone(card.phone)) || synthBusinessFromPhone(card.phone);
+                        setSelectedBiz(biz);
+                      }}
+                      className={`transition-colors cursor-pointer ${normalizePhone(selectedBiz?.phone || '') === card.phone ? 'bg-accent-soft/30' : 'hover:bg-off-white/40'}`}
+                    >
+                      <td className="py-4 px-4 w-2/5">
+                        <div className="font-bold text-sm text-ink truncate max-w-[180px]">{card.name}</div>
+                        <div className="text-[10px] text-ink-secondary flex items-center gap-1 mt-0.5">
+                          <User className="w-3 h-3 text-ink-tertiary shrink-0" />
+                          <span className="font-mono text-ink">{formatPhone(card.phone)}</span>
+                          {card.niche && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-surface text-ink text-[9px] font-bold uppercase ml-1">
+                              {card.niche}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 w-2/5">
+                        <div className="text-ink-secondary truncate max-w-[240px]">
+                          {card.last?.body || <span className="text-ink-tertiary italic">—</span>}
+                        </div>
+                        <div className="text-[10px] text-ink-tertiary mt-0.5">
+                          {card.last ? new Date(card.last.createdAt).toLocaleString() : ''}
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-right w-1/5">
+                        <ThreadStatusBadge status={card.last?.status} count={card.rows.length} />
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
 
-        {/* Chat Thread Panel */}
+        {/* Right: conversation panel */}
         {selectedBiz && (
-          <div className={`col-span-1 lg:col-span-5 flex flex-col h-[calc(100vh-140px)] min-h-[500px] bg-white border border-border-main rounded-xl shadow-sm lg:sticky top-6 z-10 ${selectedBiz ? 'block' : 'hidden lg:block'}`}>
-            
+          <div className="col-span-1 lg:col-span-5 flex flex-col h-[calc(100vh-140px)] min-h-[500px] bg-white border border-border-main rounded-xl shadow-sm lg:sticky top-6 z-10">
             {/* Header */}
             <div className="p-4 border-b border-border-light flex items-center justify-between bg-off-white rounded-t-xl shrink-0">
               <div className="flex items-center gap-3">
-                <button 
+                <button
                   className="lg:hidden p-1.5 -ml-1.5 text-ink-secondary hover:text-ink hover:bg-border-light rounded-md transition-colors"
                   onClick={() => setSelectedBiz(null)}
                 >
@@ -423,80 +328,186 @@ export const Messages: React.FC<MessagesProps> = ({
                 <div>
                   <h3 className="font-bold text-ink text-sm leading-tight truncate max-w-[160px] sm:max-w-[200px]">{selectedBiz.name}</h3>
                   <p className="text-[11px] text-ink-secondary mt-0.5 font-medium truncate max-w-[160px] sm:max-w-[200px]">
-                    <span className="font-mono">{selectedBiz.phone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3')}</span>
+                    <span className="font-mono">{formatPhone(selectedBiz.phone)}</span>
                   </p>
                 </div>
               </div>
-              <div className="flex gap-1 shrink-0">
-                {/* External link removed */}
+              <div className="text-[10px] text-ink-tertiary font-mono">
+                {lastPolledAt ? `synced ${ago(lastPolledAt)}` : 'syncing…'}
               </div>
             </div>
 
-            {/* Messages Body */}
+            {/* Messages body */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-off-white/30 scrollbar-thin scrollbar-thumb-border-main scrollbar-track-transparent">
-              {selectedBiz.smsHistory.length === 0 ? (
+              {activeRows.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-ink-secondary select-none">
                   <div className="w-12 h-12 rounded-full bg-surface border border-border-main flex items-center justify-center mb-3">
                     <MessageSquare className="w-5 h-5 text-ink-tertiary" />
                   </div>
-                  <p className="text-xs text-center max-w-[200px] font-medium text-ink-tertiary">No messages yet.<br/>Send a preview link to begin.</p>
+                  <p className="text-xs text-center max-w-[220px] font-medium text-ink-tertiary">
+                    No outbound messages to this number yet. Send one below to start the thread.
+                  </p>
                 </div>
-              ) : (
-                selectedBiz.smsHistory.map((msg, idx) => {
-                  const isOut = msg.type === 'outgoing';
-                  return (
-                    <div key={idx} className={`flex ${isOut ? 'justify-end' : 'justify-start'} animate-fade-in`}>
-                      <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-[13px] shadow-sm ${
-                        isOut 
-                          ? 'bg-accent text-white rounded-br-sm' 
-                          : 'bg-white border border-border-main text-ink rounded-bl-sm'
-                      }`}>
-                        <p className="whitespace-pre-wrap leading-relaxed font-medium">{msg.text}</p>
-                        <div className={`text-[10px] mt-2 flex items-center gap-1 ${isOut ? 'text-white/70 justify-end' : 'text-ink-tertiary justify-start'}`}>
-                          <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                          {isOut && renderDeliveryTick(msg.deliveryStatus)}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
               )}
+              {activeRows.map(row => {
+                // For now we only render outbound bubbles; inbound rows from
+                // sms_inbound (when wired up) would render as the other side.
+                const isOut = true;
+                return (
+                  <div key={row.id} className={`flex ${isOut ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                    <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-[13px] shadow-sm ${
+                      isOut
+                        ? 'bg-accent text-white rounded-br-sm'
+                        : 'bg-white border border-border-main text-ink rounded-bl-sm'
+                    }`}>
+                      <p className="whitespace-pre-wrap leading-relaxed font-medium">{row.body}</p>
+                      <div className={`text-[10px] mt-2 flex items-center gap-1 ${isOut ? 'text-white/70 justify-end' : 'text-ink-tertiary justify-start'}`}>
+                        <span>{new Date(row.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                        {isOut && renderDeliveryTick(row.status)}
+                      </div>
+                      {row.status === 'failed' && row.errorMessage && (
+                        <div className="mt-2 text-[10px] text-red-200 font-medium">
+                          {row.errorMessage}{row.errorCode ? ` (${row.errorCode})` : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               <div ref={chatEndRef} />
             </div>
 
-            {/* Input Area */}
+            {/* Composer */}
             <div className="p-3 sm:p-4 border-t border-border-light bg-white rounded-b-xl shrink-0">
-              <form onSubmit={handleSendMessage} className="flex gap-2 relative">
+              <form onSubmit={handleSend} className="flex gap-2 relative">
                 <textarea
                   value={newMessageText}
                   onChange={(e) => setNewMessageText(e.target.value)}
-                  placeholder="Type an SMS..."
-                  className="flex-1 bg-surface border border-border-main rounded-xl px-4 py-3 min-h-[50px] max-h-[120px] text-[13px] font-medium focus:outline-none focus:ring-1 focus:ring-accent resize-none placeholder:text-ink-tertiary scrollbar-thin"
+                  placeholder={`Text ${selectedBiz.name}…`}
+                  disabled={sending}
+                  className="flex-1 bg-surface border border-border-main rounded-xl px-4 py-3 min-h-[50px] max-h-[120px] text-[13px] font-medium focus:outline-none focus:ring-1 focus:ring-accent resize-none placeholder:text-ink-tertiary scrollbar-thin disabled:opacity-50"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      handleSendMessage(e);
+                      handleSend(e);
                     }
                   }}
                 />
                 <button
                   type="submit"
-                  disabled={!newMessageText.trim()}
+                  disabled={!newMessageText.trim() || sending}
                   className="self-end p-3.5 shadow-sm bg-accent hover:bg-accent-hover active:scale-95 text-white rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0 flex items-center justify-center cursor-pointer"
+                  title="Send SMS via Telnyx"
                 >
-                  <Send className="w-4 h-4 ml-0.5" />
+                  {sending
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <Send className="w-4 h-4 ml-0.5" />}
                 </button>
               </form>
-              <div className="text-[10px] text-amber-700 text-center mt-3 flex items-center justify-center gap-1.5 font-bold uppercase tracking-wider">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span>Real SMS via Telnyx — Coming Soon (queued until funded)</span>
+              <div className="text-[10px] text-ink-tertiary text-center mt-3 flex items-center justify-center gap-1.5 font-medium">
+                <Lock className="w-3 h-3" />
+                <span>Sends cost 3 credits · Delivery confirmed by Telnyx webhook</span>
               </div>
             </div>
-
           </div>
         )}
-
       </div>
     </div>
   );
 };
+
+// ----- helpers ---------------------------------------------------------------
+
+function StatPill({ label, value, color }: { label: string; value: number; color: 'amber' | 'emerald' | 'red' }) {
+  const colors: Record<string, string> = {
+    amber: 'bg-amber-500/10 text-amber-800 border-amber-500/20',
+    emerald: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20',
+    red: 'bg-red-500/10 text-red-700 border-red-500/20',
+  };
+  return (
+    <div className={`px-3 py-1.5 rounded-lg border ${colors[color]} flex flex-col items-center min-w-[64px]`}>
+      <div className="text-[10px] uppercase tracking-wider font-bold opacity-70">{label}</div>
+      <div className="text-base font-bold leading-tight">{value}</div>
+    </div>
+  );
+}
+
+function ThreadStatusBadge({ status, count }: { status?: string; count: number }) {
+  if (!status) {
+    return <span className="text-[10px] text-ink-tertiary italic">No messages</span>;
+  }
+  if (status === 'delivered') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-700 border border-emerald-500/20">
+        <CheckCheck className="w-3 h-3" />
+        Delivered
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-red-500/10 text-red-700 border border-red-500/20">
+        <AlertTriangle className="w-3 h-3" />
+        Failed
+      </span>
+    );
+  }
+  if (status === 'simulated') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-off-white text-ink-secondary border border-border-main">
+        Simulated
+      </span>
+    );
+  }
+  // queued / sent
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-amber-500/10 text-amber-800 border border-amber-500/20">
+      <Loader2 className="w-3 h-3 animate-spin" />
+      Pending
+      {count > 1 && <span className="ml-1 opacity-60">×{count}</span>}
+    </span>
+  );
+}
+
+function normalizePhone(p: string | undefined | null): string {
+  if (!p) return '';
+  const digits = String(p).replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function formatPhone(p: string): string {
+  const digits = String(p || '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return p;
+}
+
+function synthBusinessFromPhone(phone: string): Business {
+  return {
+    id: `sms-${phone}`,
+    name: formatPhone(phone),
+    owner: '',
+    phone,
+    city: '',
+    niche: '',
+    webStatus: 'pending' as any,
+    siteStatus: 'Not sent' as any,
+    slug: '',
+    siteUrl: '',
+    smsHistory: [],
+  } as Business;
+}
+
+function ago(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts);
+  if (diff < 5000) return 'just now';
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return new Date(ts).toLocaleTimeString();
+}

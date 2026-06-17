@@ -116,6 +116,10 @@ Lunao now has two fully functional products, and the outreach pipeline is **100%
 
 ### 5.1 Backend (Express + SQLite → Postgres on Railway)
 The Express server at `http://localhost:8787` (configurable `PORT`) is the single API hub. It:
+- **Site gate (`server/lib/siteGate.js`)**: a hardcoded password
+  (`$Khan1234455`, bcrypt-hashed) gates every dashboard API + page via a
+  signed 12h cookie. `GET /api/site-gate/status` lets the SPA check
+  auth state without leaking the password.
 - Serves and compiles personalized HTML sites from the 8 niche master templates.
 - Deploys compiled sites to Cloudflare Pages (live; verified URL prefix `https://*.sms-bulk-pages.pages.dev`).
 - Stores **bookings** (`POST /api/bookings`, `PATCH /api/bookings/:id`) and **chatbot conversations** (SQLite tables `chat_sessions` + `chat_messages`).

@@ -3,10 +3,10 @@ import { ArrowRight } from 'lucide-react';
 import { ctvCopy } from '../lib/copy';
 
 interface CTVProps {
-  onOpenAuth: () => void;
+  onOpenDashboard: () => void;
 }
 
-export const CTV: React.FC<CTVProps> = ({ onOpenAuth }) => {
+export const CTV: React.FC<CTVProps> = ({ onOpenDashboard }) => {
   return (
     <section
       id="ctv"
@@ -26,7 +26,7 @@ export const CTV: React.FC<CTVProps> = ({ onOpenAuth }) => {
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
           <button
             type="button"
-            onClick={onOpenAuth}
+            onClick={onOpenDashboard}
             className="h-12 px-5 rounded-md bg-accent text-white font-sans text-sm font-medium hover:bg-accent-hover transition-colors flex items-center justify-center gap-2"
           >
             {ctvCopy.ctaPrimary}

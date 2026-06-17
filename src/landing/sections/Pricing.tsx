@@ -14,7 +14,7 @@ const seatsTakenFor = (id: string) => {
   return 0;
 };
 
-export const Pricing: React.FC<PricingProps> = ({ onPickPlan }) => {
+export const Pricing: React.FC<PricingProps> = ({ onPickPlan: onOpenDashboard }) => {
   return (
     <section
       id="pricing"
@@ -92,7 +92,7 @@ export const Pricing: React.FC<PricingProps> = ({ onPickPlan }) => {
 
                   <button
                     type="button"
-                    onClick={() => onPickPlan(p.id)}
+                    onClick={() => onOpenDashboard(p.id)}
                     className={`h-10 rounded-md font-sans text-sm font-medium transition-colors ${
                       p.recommended
                         ? 'bg-accent text-white hover:bg-accent-hover'

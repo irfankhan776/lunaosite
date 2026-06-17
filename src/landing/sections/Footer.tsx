@@ -3,10 +3,10 @@ import { Logo } from '../components/Logo';
 import { footerCopy } from '../lib/copy';
 
 interface FooterProps {
-  onOpenAuth: (mode: 'login' | 'signup') => void;
+  onOpenDashboard: () => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onOpenAuth }) => {
+export const Footer: React.FC<FooterProps> = ({ onOpenDashboard }) => {
   const [openCol, setOpenCol] = useState<string | null>(null);
   const [status, setStatus] = useState<'live' | 'down' | 'checking'>('checking');
 
@@ -72,7 +72,7 @@ export const Footer: React.FC<FooterProps> = ({ onOpenAuth }) => {
                       const handleClick = (e: React.MouseEvent) => {
                         if ('auth' in l && l.auth) {
                           e.preventDefault();
-                          onOpenAuth(l.auth);
+                          onOpenDashboard();
                         }
                       };
                       if ('external' in l && l.external) {
