@@ -27,7 +27,9 @@ export const Messages: React.FC<MessagesProps> = ({
 
   // Pull real SMS rows from the server. Polls every 4s until every row is
   // terminal or 60s elapses. `forceRefresh()` is wired to the manual send.
-  const ownerKey = 'dashboard';
+  // ownerKey must match what Campaigns.tsx uses (localStorage.lunao_owner_key)
+  // so that campaign SMS logs appear here. Falls back to 'dashboard' if unset.
+  const ownerKey = localStorage.getItem('lunao_owner_key') || 'dashboard';
   const { sms, loading, error, isPolling, lastPolledAt, forceRefresh, sendOneOff } =
     useOwnerSmsPolling({ ownerKey, intervalMs: 4000, timeoutMs: 60_000, limit: 200 });
 
@@ -132,8 +134,8 @@ export const Messages: React.FC<MessagesProps> = ({
     }
     if (status === 'simulated') {
       return (
-        <span title="Simulated — no real SMS sent">
-          <Check className="w-3.5 h-3.5 text-white/60" />
+        <span title="Demo mode — no real SMS sent (SMS_ENABLED=false)">
+          <Check className="w-3.5 h-3.5 text-violet-300" />
         </span>
       );
     }
@@ -454,8 +456,8 @@ function ThreadStatusBadge({ status, count }: { status?: string; count: number }
   }
   if (status === 'simulated') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-off-white text-ink-secondary border border-border-main">
-        Simulated
+      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-bold bg-violet-500/10 text-violet-700 border border-violet-500/20">
+        Sent (Demo)
       </span>
     );
   }
