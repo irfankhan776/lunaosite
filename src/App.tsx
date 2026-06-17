@@ -54,6 +54,15 @@ function AppRouter() {
     writeRoute(route);
   }, [route]);
 
+  // Once we know we're unlocked (cookie valid), force the route to /app so
+  // a reload on /app stays on the dashboard. This handles the flow where
+  // /site-gate redirects the browser to /app after a successful unlock.
+  useEffect(() => {
+    if (!loading && unlocked && route !== '/app') {
+      setRoute('/app');
+    }
+  }, [loading, unlocked, route]);
+
   // Bounce /app back to / if the gate is locked. The Landing page renders a
   // "Continue to dashboard" button that flips to /app once the gate cookie
   // is set, so a reload after entering the password works seamlessly.

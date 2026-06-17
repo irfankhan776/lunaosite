@@ -464,8 +464,12 @@ app.get('/api/site-gate/status', handleSiteGateStatus);
 // Protect everything behind the gate. The site-gate routes, /api/health,
 // /api/webhooks/telnyx, /sites/* static, and the static /assets/* are
 // excluded inside gateProtected() so we never lock ourselves out.
+//
+// Browser entry points (/app, /dashboard) need to be protected too — without
+// them, an unauthenticated visitor would just get the SPA shell, the SPA
+// would see no cookie, and AppRouter would silently bounce them back to /.
 const GATE_PROTECTED_PREFIXES = [
-  '/dashboard', '/messages', '/campaigns', '/credits', '/bookings',
+  '/app', '/dashboard', '/messages', '/campaigns', '/credits', '/bookings',
   '/sites', '/templates', '/templates-raw', '/ai', '/owner',
 ];
 app.use(gateProtected(GATE_PROTECTED_PREFIXES));

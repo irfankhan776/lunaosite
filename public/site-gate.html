@@ -205,7 +205,7 @@
     const gate = document.getElementById('gate');
     const toggle = document.getElementById('toggle');
     const params = new URLSearchParams(location.search);
-    const next = params.get('next') || '/dashboard';
+    const next = params.get('next') || '/app';
 
     // If already authenticated, bounce straight to the dashboard.
     fetch('/api/site-gate/status', { credentials: 'include' })

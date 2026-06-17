@@ -188,6 +188,11 @@ export function gateProtected(prefixes) {
 
 // POST /api/site-gate — accept password, set cookie, return ok.
 // Body: { password: string, next?: string }
+// Default landing URL after a successful gate unlock. The SPA uses
+// in-memory routing, so any URL that serves dist/index.html works — '/app'
+// is the canonical "dashboard" entry that App.tsx watches via localStorage.
+const GATE_DEFAULT_NEXT = '/app';
+
 export async function handleSiteGateLogin(req, res) {
   const status = gateStatus();
   if (!status.configured) {
@@ -219,10 +224,17 @@ export async function handleSiteGateLogin(req, res) {
   try {
     const token = await signGateToken();
     setGateCookie(res, token);
-    return res.json({ ok: true, next: req.body?.next || '/dashboard' });
+    return res.json({ ok: true, next: sanitizeNext(req.body?.next) || GATE_DEFAULT_NEXT });
   } catch (err) {
     return res.status(500).json({ ok: false, error: 'Failed to issue session token' });
   }
+}
+
+// Allow only same-origin, single-path destinations to prevent open-redirect.
+function sanitizeNext(next) {
+  if (typeof next !== 'string' || !next.startsWith('/')) return null;
+  if (next.startsWith('//')) return null;
+  return next;
 }
 
 // POST /api/site-gate/logout — clear cookie, force re-auth.
