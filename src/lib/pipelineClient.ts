@@ -975,3 +975,22 @@ export async function deleteSiteHistory(id: string): Promise<void> {
     throw new Error(d.error || `Failed to delete history (${res.status})`);
   }
 }
+
+// Process an uploaded raw HTML file — AI injects {{PLACEHOLDERS}} and returns raw + preview.
+export async function processUploadedHtml(params: {
+  html: string;
+  niche?: string;
+  anthropicApiKey?: string;
+}): Promise<{ rawHtml: string; previewHtml: string }> {
+  const res = await fetch(`${API_BASE}/api/upload-template/process`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Upload processing failed (${res.status})`);
+  }
+  const d = await res.json();
+  return { rawHtml: d.rawHtml as string, previewHtml: d.previewHtml as string };
+}

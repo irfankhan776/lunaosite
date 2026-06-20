@@ -1286,6 +1286,93 @@ app.delete('/api/site-history/:id', authenticate, (req, res) => {
   }
 });
 
+// Upload and process a raw HTML file — inject {{PLACEHOLDERS}} via AI.
+app.post('/api/upload-template/process', authenticate, async (req, res) => {
+  try {
+    const { html, niche = 'Local Business', anthropicApiKey } = req.body || {};
+    if (!html || typeof html !== 'string' || html.trim().length < 100) {
+      return res.status(400).json({ ok: false, error: 'A valid HTML file (min 100 chars) is required.' });
+    }
+
+    const hasUserKey = typeof anthropicApiKey === 'string' && anthropicApiKey.trim().length > 0;
+    const { generateTemplateHtml, isAiEnabled } = await import('./lib/anthropic.js');
+
+    if (!hasUserKey && !isAiEnabled()) {
+      return res.status(422).json({ ok: false, error: 'AI editor not configured. Add ANTHROPIC_API_KEY to server env or provide your own key.' });
+    }
+
+    // Build an injection prompt: scan the HTML and rewrite to use placeholders
+    const injectionSystem = `You are an elite front-end engineer. A user has uploaded a raw HTML website for a local business. Your job is to rewrite it so it uses placeholder tokens for personalization.
+
+CRITICAL RULES:
+1. Find every occurrence of what appears to be a local business name (2-4 capitalized words, not common words like "Home", "Services", "Contact", "About", etc.) and replace it with {{BUSINESS_NAME}}.
+2. Find every city/location string (e.g. "Austin, TX", "New York") and replace with {{CITY}}.
+3. Find every phone number displayed in text (e.g. "(512) 555-0100") and replace with {{PHONE_DISPLAY}}.
+4. Find every tel: link href value and replace the phone part with {{PHONE_RAW}}.
+5. Replace {{BUSINESS_NAME}} SHORT occurrences (logo/brand words) with {{BUSINESS_NAME_SHORT}}.
+6. If the HTML already uses {{PLACEHOLDER}} tokens, leave them as-is.
+7. Keep EVERYTHING else byte-for-byte identical — same CSS, same JS, same structure.
+8. Output ONLY the complete rewritten HTML — no markdown fences, no explanations, no comments outside the HTML.
+9. If you can't determine what a value represents, leave it unchanged rather than risk breaking the page.
+10. For Instagram/Facebook links: if a handle or URL is present, replace with {{INSTAGRAM_HANDLE}} / {{FACEBOOK_URL}} if possible, otherwise leave as-is.
+11. NEVER invent values — only replace what you can clearly identify.`;
+
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const { anthropic: anthropicCfg } = await import('./lib/config.js');
+    const client = hasUserKey
+      ? new Anthropic({ apiKey: anthropicApiKey.trim() })
+      : new Anthropic({ apiKey: anthropicCfg.apiKey });
+
+    const trimmed = html.trim();
+    // First 2000 chars as context so the AI knows the site's style
+    const context = trimmed.length > 2000 ? trimmed.substring(0, 2000) + '\n... (truncated) ...' : trimmed;
+
+    const stream = await client.messages.stream({
+      model: anthropicCfg.model,
+      max_tokens: 24000,
+      system: injectionSystem,
+      messages: [{
+        role: 'user',
+        content: `Here is a raw HTML website. Rewrite it to use {{BUSINESS_NAME}}, {{CITY}}, {{PHONE_DISPLAY}}, {{PHONE_RAW}} placeholders as described in your instructions. Keep everything else identical.\n\nHTML:\n${context}`,
+      }],
+    });
+
+    let rawHtml = '';
+    stream.on('text', (delta) => { rawHtml += delta; });
+    await stream.finalMessage();
+
+    // Strip accidental markdown fences
+    rawHtml = (rawHtml || '').trim();
+    const fence = rawHtml.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
+    if (fence) rawHtml = fence[1].trim();
+
+    // Build preview: substitute demo values
+    const PLACEHOLDER_RE = /\{\{\s*([A-Z][A-Z0-9_]*)\s*\}\}/g;
+    const DEMO = {
+      BUSINESS_NAME: 'Radiant Smiles Dental',
+      BUSINESS_NAME_SHORT: 'Radiant',
+      CITY: 'Austin, TX',
+      STATE: 'TX',
+      PHONE_DISPLAY: '(512) 555-0199',
+      PHONE_RAW: '5125550199',
+      EMAIL: 'hello@example.com',
+      ADDRESS: '3801 Capital of Texas Hwy, Austin, TX',
+      GOOGLE_RATING: '4.9',
+      GOOGLE_REVIEW_COUNT: '342',
+      INSTAGRAM_HANDLE: 'radiant_smiles',
+      FACEBOOK_URL: 'https://facebook.com/radiantsmiles',
+    };
+    const previewHtml = rawHtml.replace(PLACEHOLDER_RE, (_, key) =>
+      key in DEMO ? DEMO[key] : `{{${key}}}`,
+    );
+
+    res.json({ ok: true, rawHtml, previewHtml });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Processing failed';
+    res.status(500).json({ ok: false, error: msg });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Template Lab — AI-powered custom template generation + management
 // ---------------------------------------------------------------------------
