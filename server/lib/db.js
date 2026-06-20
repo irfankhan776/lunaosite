@@ -196,6 +196,31 @@ const SCHEMA_SQL = `
     created_at  INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_sms_inbound_from ON sms_inbound(from_number, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS template_categories (
+    id         TEXT    PRIMARY KEY,
+    owner_key  TEXT    NOT NULL,
+    name       TEXT    NOT NULL,
+    color      TEXT    NOT NULL DEFAULT '#2563EB',
+    icon       TEXT    NOT NULL DEFAULT 'layout',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS custom_templates (
+    id           TEXT    PRIMARY KEY,
+    owner_key    TEXT    NOT NULL,
+    category_id  TEXT,
+    name         TEXT    NOT NULL,
+    slug         TEXT    NOT NULL,
+    niche        TEXT    NOT NULL DEFAULT '',
+    raw_html     TEXT    NOT NULL,
+    preview_html TEXT    NOT NULL,
+    style_tags   TEXT    NOT NULL DEFAULT '',
+    used_count   INTEGER NOT NULL DEFAULT 0,
+    created_at   INTEGER NOT NULL,
+    FOREIGN KEY (category_id) REFERENCES template_categories(id)
+  );
 `;
 
 // ---------------------------------------------------------------------------

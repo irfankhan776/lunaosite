@@ -56,8 +56,11 @@ All raw templates leverage standard structured tokens mapped directly to busines
 | `{{ADDRESS}}` | Accurate local street physical business address | 3801 Capital of Texas Hwy |
 | `{{GOOGLE_RATING}}` | Top-rated reviews scale decimal | 4.9 |
 | `{{GOOGLE_REVIEW_COUNT}}` | Target review volume of local listing | 342 |
+| `{{SITE_URL}}` | Deployed site URL for link CTAs | https://example.com |
 | `{{INSTAGRAM_HANDLE}}` | Handle without @ for social icons | everest_cooling |
 | `{{FACEBOOK_URL}}` | Complete profile link for social routing | https://facebook.com/everestcooling |
+
+> **Template Lab (AI-generated templates):** AI-generated custom templates use a **"3 by default"** rule. Only `{{BUSINESS_NAME}}`, `{{CITY}}`, `{{PHONE_DISPLAY}}`, `{{PHONE_RAW}}` are available without extra configuration. Additional placeholders are auto-unlocked based on keywords in the user's prompt. Hardcoded brand names in generated HTML are rejected. See §14 for the full system.
 
 ---
 
@@ -200,6 +203,15 @@ Verified in `server/index.js`. All JSON with `{ ok, ... }` envelope (except `/ap
 | **POST** | **`/api/campaigns/:id/refund`** | **Admin: refund any failed SMS / failed site-gen credits. Idempotent.** |
 | **GET** | **`/api/owner/sms`** | **Per-owner SMS send log. Query: `?ownerKey=&limit=100`.** |
 | **POST** | **`/api/webhooks/telnyx`** | **Telnyx webhook. Accepts `message.received` (inbound) + `message.delivered`/`message.failed`/`message.sent` (delivery). Updates `sms_logs.status` and `campaign_leads.sms_status`. Always 200 to avoid retry storms.** |
+| **GET** | **`/api/template-categories`** | **List user's custom template categories (with template counts).** |
+| **POST** | **`/api/template-categories`** | **Create a new template category. Body: `{ name, color?, icon? }`.** |
+| **PUT** | **`/api/template-categories/:id`** | **Update a category (name, color, icon, sortOrder).** |
+| **DELETE** | **`/api/template-categories/:id`** | **Delete category; templates move to uncategorized.** |
+| **GET** | **`/api/custom-templates`** | **List user's custom templates. Query: `?categoryId=` (optional).** |
+| **GET** | **`/api/custom-templates/:id/preview`** | **Return iframe-safe preview HTML (pre-filled with demo data).** |
+| **POST** | **`/api/custom-templates/generate`** | **Generate a new template via AI. Body: `{ prompt, niche, categoryId?, name? }`. Costs 2 credits. Returns `{ template }`.** |
+| **PUT** | **`/api/custom-templates/:id`** | **Update template metadata (name, category, styleTags).** |
+| **DELETE** | **`/api/custom-templates/:id`** | **Delete a custom template.** |
 
 ### 6.2 MUST BE ADDED ⚠️ (Frozen Contract — App Codes Against These)
 These endpoints are documented in `expo-app-spec/CONTEXT.md` §6 and coded into the Owner App. The app degrades gracefully until they exist. Implementing them is the next backend milestone.
@@ -446,19 +458,205 @@ npx expo export --platform web
 
 ---
 
+## 12. Authentication System (v2 — Site Gate)
+
+Lunao v2 uses a **single shared password gate** instead of per-user accounts. There is no email/password registration.
+
+### How it works
+
+```
+Visitor clicks "Start free" on landing page
+  └─> window.location.href = '/site-gate'
+        └─> site-gate.html form rendered
+              └─> Visitor types password → POST /api/site-gate
+                    └─> bcrypt.compare(password, hash) === true
+                          └─> Set httpOnly cookie `lunao_site_gate` (JWT, 12h TTL)
+                          └─> Redirect to /app
+                          └─> DashboardApp renders
+```
+
+### Password configuration (priority order)
+
+| Env var | Effect |
+|---------|--------|
+| `SITE_GATE_PASSWORD` | Plain text — server bcrypt-hashes it on startup |
+| `SITE_GATE_PASSWORD_HASH` | Pre-hashed bcrypt string (for production) |
+| None | Hardcoded default: `$Khan1234455` |
+
+### Security features
+
+- **Rate limiting**: 5 failed attempts per IP → 15-minute lockout (in-memory, resets on server restart)
+- **12h session cookie**: `lunao_site_gate`, httpOnly, signed with `SITE_GATE_JWT_SECRET`
+- **Middleware guard**: Express middleware wraps 11 path prefixes (`/app`, `/dashboard`, `/sites`, `/templates`, `/api/ai`, `/api/owner`, etc.)
+- **SPA compatibility**: `GateProvider` in React polls `GET /api/site-gate/status` and shows the Landing page while `unlocked === false`
+
+### Files involved
+
+- `server/lib/siteGate.js` — gate logic (hash, JWT secret, rate limiter, cookie helpers)
+- `public/site-gate.html` — standalone password entry page (no JS framework dependency)
+- `server/index.js` — `POST /api/site-gate`, `POST /api/site-gate/logout`, `GET /api/site-gate/status` routes
+- `src/contexts/GateContext.tsx` — React context mirroring gate state
+- `src/Landing.tsx` — `openDashboard()` navigates to `/site-gate` directly
+
+### Legacy auth (archived, not active)
+
+`server/lib/_archive_auth.js` contains a full per-user auth system (bcrypt passwords, JWT sessions, Google OAuth, `users` table) but it is **not wired into `server/index.js`** — no `app.post('/api/auth/register', ...)` etc. calls exist. To re-enable per-user auth, import and wire those functions into `server/index.js`.
+
+---
+
 ## 13. File Map
 
 ```
-lunaoexpoapp/                        # Owner App (Expo)
-├── app/                 # Screens (login, home, bookings, chats, editor, settings)
-├── components/          # UI primitives (Button, Card, Sheet, Toast, etc.)
-├── lib/                 # Core logic (api.ts, auth.ts, feedback.ts, queries.ts)
-├── theme/               # Niche palettes, fonts, ThemeProvider, Monogram
-├── assets/sounds/       # Sound effects (optional, app works without)
-├── CONTEXT.md           # Full API & data reference
-└── PROMPT.md            # Original build spec
+app/                         # Remix app (Vite dev server :3000, proxy :8787 → Express)
+├── src/
+│   ├── components/
+│   │   ├── Dashboard.tsx      # Home tab
+│   │   ├── Campaigns.tsx       # Launch wizard (CSV, Google Maps, template picker)
+│   │   ├── Editor.tsx          # Site editor + TemplateLab panel
+│   │   ├── Templates.tsx       # Template gallery
+│   │   ├── Messages.tsx        # Outreach / SMS log viewer
+│   │   ├── Settings.tsx         # API keys, billing, invite codes
+│   │   ├── Plans.tsx           # Plan upgrade UI
+│   │   └── CelebrationEffect.tsx
+│   ├── contexts/
+│   │   ├── AuthContext.tsx    # (legacy, unused in v2)
+│   │   └── GateContext.tsx     # Password gate state (v2)
+│   ├── lib/
+│   │   └── pipelineClient.ts  # All browser→API calls (SSE streaming, auth)
+│   ├── landing/                # Marketing landing page
+│   │   ├── sections/         # Nav, Hero, Pricing, etc.
+│   │   └── components/
+│   ├── data/                  # Mock data, niche lists, template metadata
+│   └── utils/
+│       └── audio.ts           # Web Audio API synthesis engine
+│
+server/                      # Express API (port 8787)
+├── index.js                 # All routes + middleware
+├── lib/
+│   ├── auth.js              # (archived) per-user auth — NOT wired
+│   ├── _archive_auth.js    # Full legacy auth impl — NOT wired
+│   ├── siteGate.js         # v2 password gate logic
+│   ├── db.js               # SQLite + Postgres adapter
+│   ├── compile.js          # Template compilation engine
+│   ├── anthropic.js        # Claude AI calls (streamEdit + generateTemplateHtml)
+│   ├── pipeline.js         # Campaign orchestrator (compile → stage → SMS)
+│   ├── csv.js              # CSV parsing + validation
+│   ├── cloudflare.js       # CF Pages publish
+│   ├── telnyx.js          # SMS send/receive
+│   ├── credits.js          # Credit ledger
+│   ├── campaigns.js         # Campaign/lead/SMS CRUD
+│   ├── bookings.js         # Booking widget DB
+│   ├── chatbot.js          # Rule-based + Gemini chatbot
+│   ├── widget.js          # Booking/chat widget injection
+│   ├── sites.js           # Site file I/O
+│   ├── inviteCodes.js      # Agency handoff codes
+│   └── slug.js            # URL slug utilities
+├── .data/                  # SQLite DB, generated sites (gitignored)
+└── .sites/                # Compiled site HTML (gitignored)
 
-expo-app-spec/                       # Planning docs (DO NOT edit the app from here)
-├── CONTEXT.md           # API contract truth — what exists vs. what must be added
-└── PROMPT.md            # God-level generation prompt for the Owner App codebase
+public/
+├── templates-raw/         # 8 master niche templates (RAW — never edit)
+│   ├── barber-template.html
+│   ├── barber-template-02.html
+│   ├── salon-template-01.html
+│   ├── dentist-template-01.html
+│   ├── hvac-template-01.html
+│   ├── gym-template-01.html
+│   ├── realestate-template-01.html
+│   └── roofing-template-01.html
+├── site-gate.html          # Standalone password page
+└── *.html                 # Live preview mirrors
+
+scripts/
+├── db-migrate.mjs         # SQLite → Postgres migration
+└── db-backup.mjs          # SQLite backup
 ```
+
+---
+
+## 14. Template Lab — AI-Powered Custom Template Generation
+
+A fully integrated feature letting users create custom website templates from a free-text prompt. Templates are stored in the DB with two HTML versions (raw with `{{PLACEHOLDERS}}` and preview with demo data) and are usable in the Campaigns wizard.
+
+### 14.1 Database Tables
+
+**`template_categories`** — user-defined groupings for custom templates:
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | TEXT PRIMARY KEY | e.g. `cat_1749...` |
+| `owner_key` | TEXT NOT NULL | per-user scoping |
+| `name` | TEXT NOT NULL | Display name |
+| `color` | TEXT DEFAULT '#2563EB' | Hex color for UI badges |
+| `icon` | TEXT DEFAULT 'layout' | Lucide icon name |
+| `sort_order` | INTEGER DEFAULT 0 | Manual ordering |
+| `created_at` | INTEGER | Unix timestamp |
+
+**`custom_templates`** — generated template storage:
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | TEXT PRIMARY KEY | e.g. `tmpl_1749...` |
+| `owner_key` | TEXT NOT NULL | per-user scoping |
+| `category_id` | TEXT | FK → template_categories (nullable) |
+| `name` | TEXT NOT NULL | Display name |
+| `slug` | TEXT NOT NULL | URL-safe identifier |
+| `niche` | TEXT NOT NULL DEFAULT '' | Business niche tag |
+| `raw_html` | TEXT NOT NULL | Full HTML with `{{PLACEHOLDERS}}` |
+| `preview_html` | TEXT NOT NULL | Full HTML with demo values filled in |
+| `style_tags` | TEXT DEFAULT '' | Comma-separated tags |
+| `used_count` | INTEGER DEFAULT 0 | Campaign usage counter |
+| `created_at` | INTEGER | Unix timestamp |
+
+### 14.2 Placeholder Rules — Strict "3 by Default" System
+
+**Core placeholders (always allowed — AI must use them):**
+```
+{{BUSINESS_NAME}}   — required everywhere the business name appears
+{{CITY}}            — required for city/location
+{{PHONE_DISPLAY}}   — required for human-readable phone (visible text)
+{{PHONE_RAW}}       — required for tel: links (href="tel:{{PHONE_RAW}}")
+```
+
+**Extra placeholders (auto-unlocked if user mentions them in prompt):**
+
+| User prompt mentions | Placeholder unlocked |
+|--------------------|---------------------|
+| "state" | `{{STATE}}` |
+| "years in business" | `{{YEARS_IN_BUSINESS}}` |
+| "email" | `{{EMAIL}}` |
+| "address" | `{{ADDRESS}}` |
+| "google rating" / "reviews" / "stars" | `{{GOOGLE_RATING}}`, `{{GOOGLE_REVIEW_COUNT}}` |
+| "instagram" / "IG" | `{{INSTAGRAM_HANDLE}}` |
+| "facebook" / "fb" | `{{FACEBOOK_URL}}` |
+| "website url" / "site link" / "url" | `{{SITE_URL}}` |
+| "doctor" / "dr." | `{{DOCTOR_NAME}}` |
+| "trainer" | `{{TRAINERS_COUNT}}` |
+| "member" | `{{MEMBERS_COUNT}}` |
+
+**Hardcoded brand names — ZERO tolerance:**
+- `findHardcodedBrandNames()` scans raw HTML for suspicious capitalized phrases
+- If any are found, the template is **rejected** and 2 credits are refunded
+- The AI is instructed to build Instagram/Facebook/email text from `{{BUSINESS_NAME}}` if the specific placeholder isn't allowed (e.g., "Find us on Facebook" linking to `{{BUSINESS_NAME}} on Facebook`)
+
+### 14.3 Compile Engine Priority
+
+When `compileSite(biz, templateKey)` is called during a campaign:
+1. **Try `custom_templates` DB** — `findCustomTemplate(templateKey)` checks by `id` OR `slug`
+2. **Fall back to built-in** — `NICHE_TEMPLATE_MAP` → `/public/templates-raw/*.html`
+
+The Campaigns wizard now sends `templateId` (e.g. `tmpl_xxxxx`) instead of just `niche`, so custom templates are used when selected.
+
+### 14.4 Credit Cost
+
+| Action | Credits |
+|--------|---------|
+| Generate 1 custom template | 2 |
+| Use custom template in campaign | 4 per lead (same as built-in) |
+
+Generation failures trigger an automatic refund (`template_gen_failed_refund`).
+
+### 14.5 Frontend UI
+
+- **Template Lab hero** — dark gradient banner in the Editor list view with "Browse Templates" and "Create New" CTAs
+- **CreateTemplateModal** — full-screen slide-up sheet with niche picker, category selector, prompt textarea, sample prompts, and live preview iframe after generation
+- **BrowseTemplatesSheet** — split-panel browser with category sidebar (desktop) / scrollable pills (mobile), template grid with iframe thumbnails, inline delete with confirmation
+- **Campaigns wizard Step 3** — custom templates appear with a violet accent and "AI" badge alongside built-in templates

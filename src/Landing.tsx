@@ -15,13 +15,14 @@ import { Footer } from './landing/sections/Footer';
 import { SectionDivider } from './landing/components/SectionDivider';
 import './landing/index.css';
 
-// v2: there's no signup/login flow anymore — every "open the dashboard" CTA
-// just routes to /app. The server-side gate middleware will redirect to
-// /site-gate if the cookie isn't set. So users land on the password page,
-// enter the password, and the SPA dashboard takes over.
+// v2: there's no per-user signup/login — the dashboard is gated behind a single
+// shared password (server/lib/siteGate.js). Clicking any "open dashboard" CTA routes
+// to /site-gate where the visitor enters the password to unlock the cookie, then
+// the SPA at /app loads with the authenticated session.
 function openDashboard() {
-  // Full nav (not router push) so the server gets a chance to 302 to /site-gate.
-  window.location.href = '/app';
+  // Go directly to /site-gate so Vite doesn't intercept and serve the SPA.
+  // After entering the password the gate page redirects to /app and the dashboard loads.
+  window.location.href = '/site-gate';
 }
 
 export const Landing: React.FC = () => {

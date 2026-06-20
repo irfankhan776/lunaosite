@@ -40,6 +40,7 @@ export const SITE_COST_PER_LEAD = 1;
 export async function runPipeline({
   businesses = [],
   niche,
+  templateId = null, // explicit custom template ID — overrides niche template lookup
   smsTemplate,
   onEvent = () => {},
   // Server-side persistence + enforcement (optional but recommended).
@@ -77,19 +78,21 @@ export async function runPipeline({
   });
 
   // Log to stdout so Railway deploy logs show the pipeline starting.
-  console.log(`[pipeline] start campaignId=${campaignId} leads=${businesses.length} niche=${niche || '(per-row)'}`);
+  console.log(`[pipeline] start campaignId=${campaignId} leads=${businesses.length} niche=${niche || '(per-row)'} templateId=${templateId || '(default)'}`);
 
   // Phase A: compile + stage every personalized site.
   for (let i = 0; i < businesses.length; i++) {
     const biz = businesses[i];
     const index = i + 1;
     const targetNiche = biz.niche || niche;
+    // Use explicit templateId if provided (custom template), otherwise fall back to niche.
+    const templateKey = templateId || targetNiche;
     const slug = biz.slug || slugify(biz.name, biz.city);
     const leadId = useDb ? leadIds[i] : null;
 
     emit('site:compiling', { index, name: biz.name, slug });
     try {
-      const { html, templateFile } = await compileSite(biz, targetNiche);
+      const { html, templateFile } = await compileSite(biz, templateKey);
       const siteUrl = await stageSite(slug, html);
       const result = {
         index,

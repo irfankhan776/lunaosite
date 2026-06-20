@@ -49,6 +49,8 @@ const TABLES = [
   'campaign_leads',
   'sms_logs',
   'sms_inbound',
+  'template_categories',
+  'custom_templates',
 ];
 
 let totalRows = 0;

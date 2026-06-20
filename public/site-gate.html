@@ -147,8 +147,20 @@
     color: var(--muted);
     margin-top: 18px;
     text-align: center;
+    line-height: 1.6;
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--muted);
+    background: rgba(167,139,250,0.08);
+    border: 1px solid rgba(167,139,250,0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-top: 14px;
+    text-align: left;
     line-height: 1.5;
   }
+  .hint strong { color: var(--accent); }
   .shake { animation: shake 360ms cubic-bezier(.36,.07,.19,.97) both; }
   @keyframes shake {
     10%, 90% { transform: translate3d(-1px, 0, 0); }
@@ -193,7 +205,10 @@
       <div class="msg" id="msg" aria-live="polite"></div>
     </form>
     <div class="lock">
-      Forgot the password? Check the deploy notes or contact your Lunao operator.
+      Forgot the password? The default is <code style="color:var(--accent);font-size:11px;">$Khan1234455</code> — change it via <code style="color:var(--accent);font-size:11px;">SITE_GATE_PASSWORD</code> in your <code style="color:var(--accent);font-size:11px;">.env.local</code>.
+    </div>
+    <div class="hint">
+      <strong>First time?</strong> The default dashboard password is <strong>$Khan1234455</strong>. To change it, set <strong>SITE_GATE_PASSWORD</strong>=yourpassword in <strong>.env.local</strong> and restart the server. For production, set <strong>SITE_GATE_PASSWORD_HASH</strong> with a bcrypt hash of your password.
     </div>
   </div>
 <script>

@@ -104,6 +104,7 @@ export async function runCampaign(
     businesses?: PipelineLead[];
     csv?: string;
     niche?: string;
+    templateId?: string; // custom template ID (tmpl_xxx) — overrides niche template
     smsTemplate?: string;
     name?: string;
     ownerKey?: string;
@@ -688,3 +689,176 @@ export const auth = {
     return res.json();
   },
 };
+
+// ---------------------------------------------------------------------------
+// Template Lab — custom template generation + category management
+// ---------------------------------------------------------------------------
+
+export interface TemplateCategory {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  sortOrder: number;
+  templateCount: number;
+}
+
+export interface CustomTemplate {
+  id: string;
+  categoryId: string | null;
+  name: string;
+  slug: string;
+  niche: string;
+  styleTags: string;
+  usedCount: number;
+  createdAt: number;
+}
+
+// List template categories.
+export async function listTemplateCategories(): Promise<TemplateCategory[]> {
+  const res = await fetch(`${API_BASE}/api/template-categories`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to load categories (${res.status})`);
+  }
+  const data = await res.json();
+  return (data.categories || []) as TemplateCategory[];
+}
+
+// Create a new template category.
+export async function createTemplateCategory(data: {
+  name: string;
+  color?: string;
+  icon?: string;
+  ownerKey?: string;
+}): Promise<TemplateCategory> {
+  const res = await fetch(`${API_BASE}/api/template-categories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to create category (${res.status})`);
+  }
+  const d = await res.json();
+  return d.category as TemplateCategory;
+}
+
+// Update a template category.
+export async function updateTemplateCategory(
+  id: string,
+  data: { name?: string; color?: string; icon?: string; sortOrder?: number; ownerKey?: string },
+): Promise<TemplateCategory> {
+  const res = await fetch(`${API_BASE}/api/template-categories/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to update category (${res.status})`);
+  }
+  const d = await res.json();
+  return d.category as TemplateCategory;
+}
+
+// Delete a template category.
+export async function deleteTemplateCategory(id: string, ownerKey?: string): Promise<void> {
+  const qs = ownerKey ? `?ownerKey=${encodeURIComponent(ownerKey)}` : '';
+  const res = await fetch(`${API_BASE}/api/template-categories/${encodeURIComponent(id)}${qs}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to delete category (${res.status})`);
+  }
+}
+
+// List custom templates for the current owner.
+export async function listCustomTemplates(categoryId?: string): Promise<CustomTemplate[]> {
+  const qs = categoryId ? `?categoryId=${encodeURIComponent(categoryId)}` : '';
+  const res = await fetch(`${API_BASE}/api/custom-templates${qs}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to load templates (${res.status})`);
+  }
+  const data = await res.json();
+  return (data.templates || []) as CustomTemplate[];
+}
+
+// Get preview HTML for a custom template (iframe-safe, pre-filled with demo data).
+export async function getTemplatePreview(id: string): Promise<{ html: string; name: string; niche: string }> {
+  const res = await fetch(`${API_BASE}/api/custom-templates/${encodeURIComponent(id)}/preview`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to load preview (${res.status})`);
+  }
+  const data = await res.json();
+  return { html: data.html as string, name: data.name as string, niche: data.niche as string };
+}
+
+// Generate a new template via AI. Pass onChunk to stream preview updates.
+export async function generateTemplate(
+  params: { prompt: string; niche?: string; categoryId?: string | null; name?: string; ownerKey?: string },
+  onChunk?: (htmlSoFar: string) => void,
+): Promise<{ id: string; name: string; slug: string; niche: string }> {
+  const res = await fetch(`${API_BASE}/api/custom-templates/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  // Handle credit errors gracefully
+  if (res.status === 402) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error || 'Insufficient credits for template generation.');
+    (err as any).needed = data.needed;
+    (err as any).available = data.available;
+    (err as any).status = 402;
+    throw err;
+  }
+
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Template generation failed (${res.status})`);
+  }
+
+  // The generate endpoint returns a simple JSON response (not SSE).
+  // For streaming previews in a future iteration, we'd add SSE support here.
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(data.error || 'Template generation failed.');
+  }
+  return data.template as { id: string; name: string; slug: string; niche: string };
+}
+
+// Update a custom template (name, category, style tags).
+export async function updateCustomTemplate(
+  id: string,
+  data: { name?: string; categoryId?: string | null; styleTags?: string; ownerKey?: string },
+): Promise<CustomTemplate> {
+  const res = await fetch(`${API_BASE}/api/custom-templates/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to update template (${res.status})`);
+  }
+  const d = await res.json();
+  return d.template as CustomTemplate;
+}
+
+// Delete a custom template.
+export async function deleteCustomTemplate(id: string, ownerKey?: string): Promise<void> {
+  const qs = ownerKey ? `?ownerKey=${encodeURIComponent(ownerKey)}` : '';
+  const res = await fetch(`${API_BASE}/api/custom-templates/${encodeURIComponent(id)}${qs}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to delete template (${res.status})`);
+  }
+}

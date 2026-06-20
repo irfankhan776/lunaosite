@@ -191,6 +191,7 @@ app.post('/api/campaign/run', async (req, res) => {
     businesses,
     csv,
     niche,
+    templateId,
     smsTemplate,
     name,
     plan,
@@ -267,6 +268,7 @@ app.post('/api/campaign/run', async (req, res) => {
     await runPipeline({
       businesses: leads,
       niche,
+      templateId,
       smsTemplate,
       onEvent: send,
       ownerKey,
@@ -1113,6 +1115,238 @@ app.post('/api/owner/sms', authenticate, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Template Lab — AI-powered custom template generation + management
+// ---------------------------------------------------------------------------
+
+// List template categories for the current owner.
+app.get('/api/template-categories', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const cats = db.prepare(
+      'SELECT id, name, color, icon, sort_order FROM template_categories WHERE owner_key = ? ORDER BY sort_order ASC, created_at ASC',
+    ).all(ownerKey);
+    const countStmt = db.prepare('SELECT COUNT(*) as count FROM custom_templates WHERE category_id = ?');
+    const result = cats.map((c) => {
+      const { count } = countStmt.get(c.id);
+      return { id: c.id, name: c.name, color: c.color, icon: c.icon, sortOrder: c.sort_order, templateCount: count };
+    });
+    res.json({ ok: true, categories: result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Create a new template category.
+app.post('/api/template-categories', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query.ownerKey || '').trim();
+    const { name, color = '#2563EB', icon = 'layout' } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ ok: false, error: 'name is required' });
+    }
+    const id = `cat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const now = Math.floor(Date.now() / 1000);
+    const maxOrder = db.prepare(
+      'SELECT MAX(sort_order) as m FROM template_categories WHERE owner_key = ?',
+    ).get(ownerKey);
+    const sortOrder = (maxOrder?.m ?? -1) + 1;
+    db.prepare(
+      'INSERT INTO template_categories (id, owner_key, name, color, icon, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, ownerKey, name.trim(), color, icon, sortOrder, now);
+    res.json({ ok: true, category: { id, name: name.trim(), color, icon, sortOrder, templateCount: 0 } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Update a template category.
+app.put('/api/template-categories/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const { name, color, icon, sortOrder } = req.body || {};
+    const existing = db.prepare(
+      'SELECT * FROM template_categories WHERE id = ? AND owner_key = ?',
+    ).get(req.params.id, ownerKey);
+    if (!existing) return res.status(404).json({ ok: false, error: 'Category not found' });
+    const updates = [];
+    const values = [];
+    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+    if (color !== undefined) { updates.push('color = ?'); values.push(color); }
+    if (icon !== undefined) { updates.push('icon = ?'); values.push(icon); }
+    if (sortOrder !== undefined) { updates.push('sort_order = ?'); values.push(sortOrder); }
+    if (updates.length === 0) return res.json({ ok: true, category: existing });
+    values.push(req.params.id, ownerKey);
+    db.prepare(`UPDATE template_categories SET ${updates.join(', ')} WHERE id = ? AND owner_key = ?`).run(...values);
+    const updated = db.prepare('SELECT * FROM template_categories WHERE id = ?').get(req.params.id);
+    res.json({ ok: true, category: { id: updated.id, name: updated.name, color: updated.color, icon: updated.icon, sortOrder: updated.sort_order } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Delete a template category (templates move to uncategorized).
+app.delete('/api/template-categories/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const existing = db.prepare(
+      'SELECT * FROM template_categories WHERE id = ? AND owner_key = ?',
+    ).get(req.params.id, ownerKey);
+    if (!existing) return res.status(404).json({ ok: false, error: 'Category not found' });
+    db.prepare('UPDATE custom_templates SET category_id = NULL WHERE category_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM template_categories WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// List custom templates for the current owner.
+app.get('/api/custom-templates', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const { categoryId } = req.query;
+    let rows;
+    if (categoryId) {
+      rows = db.prepare(
+        'SELECT id, category_id, name, slug, niche, style_tags, used_count, created_at FROM custom_templates WHERE owner_key = ? AND category_id = ? ORDER BY created_at DESC',
+      ).all(ownerKey, categoryId);
+    } else {
+      rows = db.prepare(
+        'SELECT id, category_id, name, slug, niche, style_tags, used_count, created_at FROM custom_templates WHERE owner_key = ? ORDER BY created_at DESC',
+      ).all(ownerKey);
+    }
+    const templates = rows.map((r) => ({
+      id: r.id, categoryId: r.category_id || null, name: r.name, slug: r.slug,
+      niche: r.niche, styleTags: r.style_tags, usedCount: r.used_count, createdAt: r.created_at,
+    }));
+    res.json({ ok: true, templates });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Get the preview HTML for a specific custom template (iframe-safe, pre-filled with demo data).
+app.get('/api/custom-templates/:id/preview', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const t = db.prepare(
+      'SELECT * FROM custom_templates WHERE id = ? AND owner_key = ?',
+    ).get(req.params.id, ownerKey);
+    if (!t) return res.status(404).json({ ok: false, error: 'Template not found' });
+    res.json({ ok: true, html: t.preview_html, name: t.name, niche: t.niche });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Generate a new template via AI — THE CORE ENDPOINT.
+// Body: { prompt, niche, categoryId?, name?, ownerKey? }
+app.post('/api/custom-templates/generate', authenticate, async (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query?.ownerKey || '').trim();
+    const { prompt, niche = 'Local Business', categoryId = null, name } = req.body || {};
+
+    // Input validation
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 20) {
+      return res.status(400).json({ ok: false, error: 'Prompt must be at least 20 characters.' });
+    }
+    if (prompt.trim().length > 2000) {
+      return res.status(400).json({ ok: false, error: 'Prompt must be 2000 characters or fewer.' });
+    }
+
+    // Credit gate: 2 credits per generation
+    const balance = checkBalance(ownerKey);
+    if (balance.available < 2) {
+      return res.status(402).json({ ok: false, error: 'Insufficient credits. Need 2 credits to generate a template.', needed: 2, available: balance.available });
+    }
+
+    // Charge 2 credits upfront
+    charge(ownerKey, 2, 'template_generate', null);
+
+    let rawHtml, previewHtml;
+    try {
+      ({ rawHtml, previewHtml } = await import('./lib/anthropic.js').then((m) =>
+        m.generateTemplateHtml(prompt.trim(), niche),
+      ));
+    } catch (genErr) {
+      // Refund the 2 credits on AI failure
+      refund(ownerKey, 2, 'template_gen_failed_refund', null);
+      const msg = genErr instanceof Error ? genErr.message : 'Generation failed';
+      return res.status(422).json({ ok: false, error: msg });
+    }
+
+    // Persist to DB
+    const id = `tmpl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const slug = (name || `template-${id}`).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const now = Math.floor(Date.now() / 1000);
+
+    db.prepare(
+      `INSERT INTO custom_templates (id, owner_key, category_id, name, slug, niche, raw_html, preview_html, style_tags, used_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+    ).run(id, ownerKey, categoryId || null, name || `AI Template ${new Date().toLocaleDateString()}`, slug, niche, rawHtml, previewHtml, '', now);
+
+    res.json({
+      ok: true,
+      template: { id, name: name || 'AI Template', slug, niche },
+      creditsCharged: 2,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Update a custom template (name, category, style tags).
+app.put('/api/custom-templates/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const existing = db.prepare(
+      'SELECT * FROM custom_templates WHERE id = ? AND owner_key = ?',
+    ).get(req.params.id, ownerKey);
+    if (!existing) return res.status(404).json({ ok: false, error: 'Template not found' });
+
+    const { name, categoryId, styleTags } = req.body || {};
+    const updates = [];
+    const values = [];
+    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+    if (categoryId !== undefined) { updates.push('category_id = ?'); values.push(categoryId || null); }
+    if (styleTags !== undefined) { updates.push('style_tags = ?'); values.push(styleTags); }
+
+    if (updates.length > 0) {
+      values.push(req.params.id, ownerKey);
+      db.prepare(`UPDATE custom_templates SET ${updates.join(', ')} WHERE id = ? AND owner_key = ?`).run(...values);
+    }
+
+    const updated = db.prepare('SELECT * FROM custom_templates WHERE id = ?').get(req.params.id);
+    res.json({
+      ok: true,
+      template: {
+        id: updated.id, name: updated.name, slug: updated.slug, niche: updated.niche,
+        categoryId: updated.category_id || null, styleTags: updated.style_tags,
+        usedCount: updated.used_count, createdAt: updated.created_at,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Delete a custom template.
+app.delete('/api/custom-templates/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const existing = db.prepare(
+      'SELECT * FROM custom_templates WHERE id = ? AND owner_key = ?',
+    ).get(req.params.id, ownerKey);
+    if (!existing) return res.status(404).json({ ok: false, error: 'Template not found' });
+    db.prepare('DELETE FROM custom_templates WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // In Railway (and any other PaaS), PORT is injected by the platform. We also
 // log the public base URL so the boot banner shows what Twilio / Cloudflare
 // should point at.

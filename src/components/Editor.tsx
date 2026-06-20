@@ -4,7 +4,8 @@ import {
   Send, Monitor, Smartphone, Wand2, Loader2, ExternalLink, X,
   Rocket, AlertCircle, Pencil, CheckCircle2, Link2,
   Globe, Copy, Eye, Search, RefreshCw, Clock,
-  Puzzle, MessageCircle, UserPlus,
+  Puzzle, MessageCircle, UserPlus, Sparkles,
+  Download, Trash2, Layout,
 } from 'lucide-react';
 import {
   listSites, getSiteHtml, saveSiteHtml, deploySite, streamAiEdit,
@@ -15,7 +16,7 @@ import {
 import {
   playSoftTap, playTiktokLike, playSlideTick, playDialogPop, playSoftBubble,
   playElegantBell, playConfirmSuccess, playVictoryCelebration, playGentleChime,
-  playElegantError, playCancelTone,
+  playElegantError, playCancelTone, playMagicWhoosh,
 } from '../utils/audio';
 import { InviteClientDrawer } from './InviteClientDrawer';
 
@@ -69,6 +70,7 @@ const sfx = {
   saved: playConfirmSuccess,
   deployed: playVictoryCelebration,
   aiDone: () => playGentleChime(3),
+  magic: playMagicWhoosh,     // AI starts generating a template
   error: playElegantError,
   close: playCancelTone,
 };
@@ -113,6 +115,10 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
   const [inviteRefreshKey, setInviteRefreshKey] = useState(0);
+
+  // Template Lab state
+  const [createOpen, setCreateOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   // AI chat
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -440,6 +446,14 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
       <div key="editor-list" className="max-w-[1400px] mx-auto animate-editor-rise">
         {toast && <ToastBanner toast={toast} onClose={() => setToast(null)} />}
 
+        {/* Error */}
+        {listError && (
+          <div className="flex items-start gap-3 p-4 rounded-xl bg-danger-soft border border-danger/20 text-danger mb-6">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+            <div className="text-sm font-sans">{listError}</div>
+          </div>
+        )}
+
         {/* Hero header */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
           <div className="flex items-start gap-3.5">
@@ -463,13 +477,42 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
           </button>
         </div>
 
-        {/* Error */}
-        {listError && (
-          <div className="flex items-start gap-3 p-4 rounded-xl bg-danger-soft border border-danger/20 text-danger mb-6">
-            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-            <div className="text-sm font-sans">{listError}</div>
-          </div>
-        )}
+        {/* Template Lab — AI-powered custom template creator */}
+        <TemplateLab
+          aiEnabled={aiEnabled}
+          onBrowseTemplates={() => {
+            sfx.open();
+            setBrowseOpen(true);
+          }}
+          onCreateNew={() => {
+            sfx.primary();
+            setCreateOpen(true);
+          }}
+        />
+
+        {/* Browse My Templates sheet */}
+        <BrowseTemplatesSheet
+          open={browseOpen}
+          onClose={() => { sfx.close(); setBrowseOpen(false); }}
+          onUseTemplate={(t) => {
+            sfx.engage();
+            flashToast({ type: 'info', text: `Template "${t.name}" selected. Use it in a campaign wizard.` });
+            setBrowseOpen(false);
+          }}
+        />
+
+        {/* Create Template modal */}
+        <CreateTemplateModal
+          open={createOpen}
+          onClose={() => { sfx.close(); setCreateOpen(false); }}
+          aiEnabled={aiEnabled}
+          onGenerated={(t) => {
+            sfx.confirmSuccess();
+            flashToast({ type: 'success', text: `"${t.name}" saved to your templates.` });
+            setCreateOpen(false);
+            setBrowseOpen(true);
+          }}
+        />
 
         {/* Loading skeleton */}
         {listLoading && (
@@ -1120,3 +1163,768 @@ const ToastBanner: React.FC<{ toast: NonNullable<Toast>; onClose: () => void }> 
     </div>
   );
 };
+
+// ===========================================================================
+// TEMPLATE LAB — AI-powered custom template creator
+// ===========================================================================
+
+const SAMPLE_PROMPTS = [
+  'Modern dental clinic with warm amber tones, hero with booking CTA, services grid, patient testimonials, before/after gallery',
+  'Bold HVAC company website with navy and orange, emergency 24/7 banner, services checklist, service area map section',
+  'Luxury barber shop with dark wood tones, vintage aesthetic, services menu with prices, about the barbers section',
+];
+
+// Template Lab hero section — shown above the site grid in the Editor list view.
+const TemplateLab: React.FC<{
+  aiEnabled: boolean;
+  onBrowseTemplates: () => void;
+  onCreateNew: () => void;
+}> = ({ aiEnabled, onBrowseTemplates, onCreateNew }) => (
+  <div className="relative mb-8 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A1916] via-[#2A2925] to-[#1A1916] animate-sparkle-in">
+    {/* Ambient glow */}
+    <div className="pointer-events-none absolute -top-20 -right-20 w-72 h-72 bg-accent/20 rounded-full blur-3xl" />
+    <div className="pointer-events-none absolute -bottom-16 -left-16 w-56 h-56 bg-violet-500/10 rounded-full blur-2xl" />
+
+    <div className="relative px-6 py-7 sm:px-8 sm:py-8 flex flex-col sm:flex-row sm:items-center gap-5">
+      {/* Left — icon + copy */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2.5 mb-2">
+          <div className="w-8 h-8 rounded-lg bg-accent/20 border border-accent/30 flex items-center justify-center">
+            <Sparkles className="w-4 h-4 text-accent" />
+          </div>
+          <span className="text-xs font-bold font-sans text-white/60 uppercase tracking-widest">Template Lab</span>
+        </div>
+        <h2 className="text-lg sm:text-xl font-bold font-sans text-white mb-1 leading-snug">
+          Design any website with AI
+        </h2>
+        <p className="text-sm font-sans text-white/50 max-w-md">
+          Describe a business type and style in plain English. AI generates a complete template — no code required.
+        </p>
+        {!aiEnabled && (
+          <div className="flex items-center gap-1.5 mt-2 text-[11px] text-amber-400/80 font-sans">
+            <AlertCircle className="w-3.5 h-3.5" />
+            AI generation needs an Anthropic key on the server.
+          </div>
+        )}
+      </div>
+
+      {/* Right — CTAs */}
+      <div className="flex flex-col sm:flex-row gap-2.5 shrink-0">
+        <button
+          onClick={onBrowseTemplates}
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-semibold font-sans hover:bg-white/20 active:scale-[0.98] transition-all"
+        >
+          <Layout className="w-4 h-4" />
+          Browse Templates
+        </button>
+        <button
+          onClick={onCreateNew}
+          disabled={!aiEnabled}
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Wand2 className="w-4 h-4" />
+          Create New
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+// ===========================================================================
+// CREATE TEMPLATE MODAL — full-screen slide-up sheet
+// ===========================================================================
+
+const NICHE_OPTIONS = [
+  'Barber', 'Salon', 'Dentist', 'HVAC', 'Gym', 'Roofing', 'Real Estate', 'Restaurant', 'Photography', 'Auto Repair', 'Custom',
+];
+
+const PRESET_COLORS = [
+  '#2563EB', '#7C3AED', '#DB2777', '#DC2626',
+  '#D97706', '#16A34A', '#0891B2', '#4F46E5',
+];
+
+const CreateTemplateModal: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  aiEnabled: boolean;
+  onGenerated: (t: { id: string; name: string; slug: string; niche: string }) => void;
+}> = ({ open, onClose, aiEnabled, onGenerated }) => {
+  const [step, setStep] = useState<'form' | 'preview'>('form');
+  const [name, setName] = useState('');
+  const [niche, setNiche] = useState('Barber');
+  const [customNiche, setCustomNiche] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryColor, setNewCategoryColor] = useState('#2563EB');
+  const [categories, setCategories] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [loadingCats, setLoadingCats] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [generatedTemplate, setGeneratedTemplate] = useState<{ id: string; name: string; slug: string; niche: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [showNewCat, setShowNewCat] = useState(false);
+
+  const activeNiche = niche === 'Custom' ? customNiche.trim() : niche;
+
+  // Load categories on open
+  useEffect(() => {
+    if (!open) return;
+    setLoadingCats(true);
+    import('../lib/pipelineClient').then(async ({ listTemplateCategories }) => {
+      try {
+        const cats = await listTemplateCategories();
+        setCategories(cats.map((c) => ({ id: c.id, name: c.name, color: c.color })));
+      } catch {
+        setCategories([]);
+      } finally {
+        setLoadingCats(false);
+      }
+    });
+  }, [open]);
+
+  const reset = () => {
+    setStep('form');
+    setName('');
+    setNiche('Barber');
+    setCustomNiche('');
+    setPrompt('');
+    setCategoryId(null);
+    setNewCategoryName('');
+    setNewCategoryColor('#2563EB');
+    setPreviewHtml('');
+    setGeneratedTemplate(null);
+    setError(null);
+    setSaving(false);
+    setShowNewCat(false);
+  };
+
+  useEffect(() => {
+    if (!open) reset();
+  }, [open]);
+
+  const handleGenerate = async () => {
+    if (!prompt.trim() || prompt.trim().length < 20) {
+      setError('Please write at least 20 characters describing your template.');
+      return;
+    }
+    if (!activeNiche) {
+      setError('Please select or type a business niche.');
+      return;
+    }
+
+    setError(null);
+    setGenerating(true);
+    playMagicWhoosh();
+
+    try {
+      const { generateTemplate, listTemplateCategories } = await import('../lib/pipelineClient');
+
+      // Create category if user typed a new one
+      let catId = categoryId;
+      if (showNewCat && newCategoryName.trim()) {
+        const { createTemplateCategory } = await import('../lib/pipelineClient');
+        const cat = await createTemplateCategory({ name: newCategoryName.trim(), color: newCategoryColor });
+        catId = cat.id;
+        setCategories((prev) => [...prev, { id: cat.id, name: cat.name, color: cat.color }]);
+      }
+
+      const result = await generateTemplate({
+        prompt: prompt.trim(),
+        niche: activeNiche,
+        categoryId: catId,
+        name: name.trim() || undefined,
+      });
+
+      setGeneratedTemplate(result);
+      setStep('preview');
+      // Fetch preview HTML
+      const { getTemplatePreview } = await import('../lib/pipelineClient');
+      const { html } = await getTemplatePreview(result.id);
+      setPreviewHtml(html);
+      playGentleChime(3);
+    } catch (err: any) {
+      playElegantError();
+      const msg = err?.message || 'Generation failed. Please try again.';
+      if (err?.status === 402) {
+        setError(`Insufficient credits. ${msg}`);
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-ink/50 backdrop-blur-sm animate-editor-fade"
+      onClick={(e) => { if (e.target === e.currentTarget) { sfx.close(); onClose(); } }}
+    >
+      <div
+        className="w-full bg-white rounded-t-2xl sm:rounded-2xl border border-border-main shadow-[0_24px_70px_rgba(26,25,22,0.28)] overflow-hidden animate-editor-rise max-h-[94dvh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-light shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-accent-soft flex items-center justify-center">
+              <Wand2 className="w-4 h-4 text-accent" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold font-sans text-ink leading-none">Create Template</h2>
+              <p className="text-[11px] text-ink-secondary font-sans mt-0.5">
+                {step === 'form' ? 'Describe your website in plain English' : 'Preview your generated template'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {step === 'preview' && (
+              <button
+                onClick={() => setStep('form')}
+                className="text-xs font-medium text-accent font-sans hover:text-accent/80 transition-colors"
+              >
+                Edit prompt
+              </button>
+            )}
+            <button
+              onClick={() => { sfx.close(); onClose(); }}
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-ink-secondary hover:text-ink hover:bg-off-white transition-all"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Step indicator */}
+        <div className="flex items-center gap-1.5 px-5 py-2.5 border-b border-border-light bg-off-white/60 shrink-0">
+          {['form', 'preview'].map((s, i) => (
+            <React.Fragment key={s}>
+              <div className={`flex items-center gap-1.5 ${step === s ? 'text-accent' : 'text-ink-tertiary'}`}>
+                <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${step === s ? 'bg-accent text-white' : 'bg-border-main text-ink-secondary'}`}>
+                  {i + 1}
+                </div>
+                <span className="text-xs font-medium font-sans capitalize">{s === 'form' ? 'Describe' : 'Preview & Save'}</span>
+              </div>
+              {i < 1 && <div className="flex-1 h-px bg-border-light mx-1" />}
+            </React.Fragment>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto">
+          {/* FORM STEP */}
+          {step === 'form' && (
+            <div className="px-5 py-5 space-y-5">
+              {/* Template name */}
+              <div>
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Template Name <span className="text-ink-tertiary font-normal">(optional)</span></label>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Modern Dental Clinic"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border-main bg-white text-sm font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all"
+                />
+              </div>
+
+              {/* Business niche */}
+              <div>
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Business Niche</label>
+                <div className="flex flex-wrap gap-2">
+                  {NICHE_OPTIONS.map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => { sfx.toggle(); setNiche(n); }}
+                      className={`shrink-0 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all active:scale-[0.96] ${
+                        niche === n
+                          ? 'bg-accent text-white border-accent shadow-sm'
+                          : 'bg-white text-ink-secondary border-border-main hover:text-ink hover:border-accent/40'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                {niche === 'Custom' && (
+                  <input
+                    value={customNiche}
+                    onChange={(e) => setCustomNiche(e.target.value)}
+                    placeholder="Type a custom niche…"
+                    className="mt-2 w-full px-3.5 py-2.5 rounded-xl border border-border-main bg-white text-sm font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all"
+                    autoFocus
+                  />
+                )}
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Category</label>
+                <div className="flex flex-wrap gap-2 items-center">
+                  {loadingCats ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-ink-tertiary" />
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { sfx.toggle(); setCategoryId(null); setShowNewCat(false); }}
+                        className={`shrink-0 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all active:scale-[0.96] ${
+                          categoryId === null && !showNewCat
+                            ? 'bg-ink text-white border-ink'
+                            : 'bg-white text-ink-secondary border-border-main hover:text-ink'
+                        }`}
+                      >
+                        Uncategorized
+                      </button>
+                      {categories.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => { sfx.toggle(); setCategoryId(c.id); setShowNewCat(false); }}
+                          className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all active:scale-[0.96] ${
+                            categoryId === c.id
+                              ? 'border-current'
+                              : 'bg-white border-border-main hover:border-border-main'
+                          }`}
+                          style={categoryId === c.id ? { color: c.color, backgroundColor: `${c.color}15`, borderColor: c.color } : {}}
+                        >
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
+                          {c.name}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => { sfx.tap(); setShowNewCat(!showNewCat); setCategoryId(null); }}
+                        className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-semibold font-sans border border-dashed border-border-main text-ink-secondary hover:text-accent hover:border-accent/40 transition-all"
+                      >
+                        <span className="text-sm">+</span> New
+                      </button>
+                    </>
+                  )}
+                </div>
+                {showNewCat && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {PRESET_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => { sfx.tap(); setNewCategoryColor(c); }}
+                          className={`w-6 h-6 rounded-full border-2 transition-all ${newCategoryColor === c ? 'border-ink scale-110' : 'border-transparent'}`}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                        />
+                      ))}
+                    </div>
+                    <input
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      placeholder="Category name…"
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-border-main bg-white text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent"
+                      autoFocus
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Prompt */}
+              <div>
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Describe your template</label>
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="e.g. A modern dental clinic website with warm amber tones, hero section with a booking CTA, services grid, patient testimonials, before/after gallery, and a contact form…"
+                  rows={5}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border-main bg-white text-sm font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all resize-none"
+                />
+                <div className="flex items-start gap-1.5 mt-2 text-[11px] text-warning font-sans bg-warning-soft rounded-lg px-3 py-2">
+                  <AlertCircle className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />
+                  <span>
+                    <strong>3 rules:</strong> (1) Use <strong>only business name</strong>, <strong>city</strong>, and <strong>phone</strong> in your description. (2) If you mention Instagram, Facebook, email, etc. — AI auto-adds those placeholders too. (3) Never describe specific fake brands. Example: "dental clinic" not "Radiant Smiles Dental". All branding is personalized automatically during campaigns.
+                  </span>
+                </div>
+                {/* Sample prompts */}
+                <div className="mt-3 space-y-1.5">
+                  <span className="text-[11px] text-ink-tertiary font-sans">Try one of these:</span>
+                  {SAMPLE_PROMPTS.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => { sfx.tap(); setPrompt(p); }}
+                      className="w-full text-left text-xs font-sans text-ink-secondary bg-off-white hover:bg-accent-soft hover:text-accent rounded-lg px-3 py-2 transition-all"
+                    >
+                      "{p}"
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Error */}
+              {error && (
+                <div className="flex items-start gap-2 p-3.5 rounded-xl bg-danger-soft border border-danger/20 text-danger text-sm font-sans">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  {error}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* PREVIEW STEP */}
+          {step === 'preview' && (
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2 px-5 py-3 bg-success-soft border-b border-success/20 shrink-0">
+                <CheckCircle2 className="w-4 h-4 text-success" />
+                <span className="text-sm font-semibold font-sans text-success">Template generated!</span>
+                <span className="text-xs text-success/70 font-sans">Preview below with demo data.</span>
+              </div>
+
+              {/* Preview iframe */}
+              <div className="flex-1 bg-[#f4f2ee]">
+                {previewHtml ? (
+                  <div className="h-full flex justify-center py-4 px-4">
+                    <div className="w-full max-w-[900px] bg-white rounded-xl border border-border-main shadow-md overflow-hidden" style={{ height: '65vh' }}>
+                      <iframe
+                        srcDoc={previewHtml}
+                        title="Template preview"
+                        className="w-full h-full border-0"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-48">
+                    <Loader2 className="w-6 h-6 animate-spin text-accent" />
+                  </div>
+                )}
+              </div>
+
+              {/* Save bar */}
+              <div className="px-5 py-4 border-t border-border-light bg-white shrink-0 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold font-sans text-ink truncate">{generatedTemplate?.name}</p>
+                  <p className="text-[11px] text-ink-secondary font-sans">
+                    Template is saved with AI placeholders — ready for campaigns.
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={() => {
+                      const blob = new Blob([previewHtml], { type: 'text/html' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `${generatedTemplate?.slug || 'template'}.html`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      sfx.copy();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-border-main text-ink text-sm font-semibold font-sans hover:bg-off-white active:scale-[0.98] transition-all"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download HTML
+                  </button>
+                  <button
+                    onClick={() => {
+                      sfx.confirmSuccess();
+                      onGenerated(generatedTemplate!);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-accent text-white text-sm font-semibold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Save Template
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer — Generate button (form step only) */}
+        {step === 'form' && (
+          <div className="px-5 py-4 border-t border-border-light bg-white shrink-0">
+            <button
+              onClick={handleGenerate}
+              disabled={generating || !aiEnabled}
+              className="w-full inline-flex items-center justify-center gap-2.5 px-5 py-3 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {generating ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Generating with AI…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  Generate Template (2 credits)
+                </>
+              )}
+            </button>
+            <p className="text-center text-[11px] text-ink-tertiary font-sans mt-1.5">
+              Uses 2 credits. Prompt generates a full HTML template with proper placeholders.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ===========================================================================
+// BROWSE TEMPLATES SHEET — full-screen slide-up, category list + template grid
+// ===========================================================================
+
+const BrowseTemplatesSheet: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onUseTemplate: (t: { id: string; name: string; slug: string; niche: string }) => void;
+}> = ({ open, onClose, onUseTemplate }) => {
+  const [categories, setCategories] = useState<{ id: string; name: string; color: string; templateCount: number }[]>([]);
+  const [activeCategoryId, setActiveCategoryId] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<{ id: string; name: string; slug: string; niche: string; categoryId: string | null }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { listTemplateCategories, listCustomTemplates } = await import('../lib/pipelineClient');
+      const [cats, tmpls] = await Promise.all([listTemplateCategories(), listCustomTemplates()]);
+      setCategories(cats.map((c) => ({ id: c.id, name: c.name, color: c.color, templateCount: c.templateCount })));
+      setTemplates(tmpls.map((t) => ({ id: t.id, name: t.name, slug: t.slug, niche: t.niche, categoryId: t.categoryId })));
+    } catch {
+      setCategories([]);
+      setTemplates([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) loadAll();
+  }, [open, loadAll]);
+
+  const loadPreview = async (id: string) => {
+    setPreviewLoading(true);
+    setPreviewId(id);
+    setPreviewHtml('');
+    try {
+      const { getTemplatePreview } = await import('../lib/pipelineClient');
+      const { html } = await getTemplatePreview(id);
+      setPreviewHtml(html);
+    } catch {
+      setPreviewHtml('');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setDeleting(true);
+    try {
+      const { deleteCustomTemplate } = await import('../lib/pipelineClient');
+      await deleteCustomTemplate(id);
+      setTemplates((prev) => prev.filter((t) => t.id !== id));
+      setDeleteConfirmId(null);
+      if (previewId === id) { setPreviewId(null); setPreviewHtml(''); }
+      sfx.confirmSuccess();
+    } catch {
+      sfx.error();
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const filteredTemplates = activeCategoryId === null
+    ? templates
+    : templates.filter((t) => t.categoryId === activeCategoryId);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-ink/50 backdrop-blur-sm animate-editor-fade"
+      onClick={(e) => { if (e.target === e.currentTarget) { sfx.close(); onClose(); } }}
+    >
+      <div
+        className="w-full bg-white rounded-t-2xl sm:rounded-2xl border border-border-main shadow-[0_24px_70px_rgba(26,25,22,0.28)] overflow-hidden animate-editor-rise max-h-[94dvh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-light shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-accent-soft flex items-center justify-center">
+              <Layout className="w-4 h-4 text-accent" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold font-sans text-ink leading-none">My Templates</h2>
+              <p className="text-[11px] text-ink-secondary font-sans mt-0.5">{templates.length} custom template{templates.length !== 1 ? 's' : ''}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => { sfx.close(); onClose(); }}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-ink-secondary hover:text-ink hover:bg-off-white transition-all"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left panel — category sidebar (desktop only) */}
+          <div className="hidden sm:flex w-52 flex-col border-r border-border-light shrink-0 overflow-y-auto">
+            <div className="p-3 space-y-1">
+              <button
+                onClick={() => { sfx.toggle(); setActiveCategoryId(null); setSelectedId(null); setPreviewId(null); setPreviewHtml(''); }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium font-sans transition-all ${
+                  activeCategoryId === null ? 'bg-accent text-white' : 'text-ink-secondary hover:bg-off-white hover:text-ink'
+                }`}
+              >
+                <span>All Templates</span>
+                <span className="text-[11px] opacity-70">{templates.length}</span>
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => { sfx.toggle(); setActiveCategoryId(cat.id); setSelectedId(null); setPreviewId(null); setPreviewHtml(''); }}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium font-sans transition-all ${
+                    activeCategoryId === cat.id
+                      ? 'bg-off-white text-ink'
+                      : 'text-ink-secondary hover:bg-off-white hover:text-ink'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
+                    {cat.name}
+                  </span>
+                  <span className="text-[11px] opacity-70">{cat.templateCount}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right panel — templates grid + preview */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Mobile category pills */}
+            <div className="flex sm:hidden items-center gap-1.5 px-4 py-2.5 border-b border-border-light overflow-x-auto scrollbar-none shrink-0">
+              <button
+                onClick={() => { sfx.toggle(); setActiveCategoryId(null); setSelectedId(null); }}
+                className={`shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all ${
+                  activeCategoryId === null ? 'bg-accent text-white border-accent' : 'bg-white text-ink-secondary border-border-main'
+                }`}
+              >
+                All <span className="text-[10px] opacity-70">{templates.length}</span>
+              </button>
+              {categories.map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => { sfx.toggle(); setActiveCategoryId(cat.id); setSelectedId(null); }}
+                  className={`shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all ${
+                    activeCategoryId === cat.id ? 'border-current text-white' : 'bg-white text-ink-secondary border-border-main'
+                  }`}
+                  style={activeCategoryId === cat.id ? { backgroundColor: cat.color, borderColor: cat.color } : {}}
+                >
+                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+
+            {loading ? (
+              <div className="flex-1 flex items-center justify-center">
+                <Loader2 className="w-6 h-6 animate-spin text-accent" />
+              </div>
+            ) : filteredTemplates.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12">
+                <div className="w-14 h-14 rounded-2xl bg-off-white flex items-center justify-center mx-auto mb-4">
+                  <Layout className="w-7 h-7 text-ink-tertiary" />
+                </div>
+                <h3 className="text-base font-bold font-sans text-ink mb-1">No templates yet</h3>
+                <p className="text-sm text-ink-secondary font-sans max-w-xs">
+                  Create your first AI-powered template with Template Lab above.
+                </p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredTemplates.map((t, i) => (
+                    <div
+                      key={t.id}
+                      className={`animate-sparkle-in rounded-xl border bg-white overflow-hidden flex flex-col transition-all group ${
+                        selectedId === t.id
+                          ? 'border-accent shadow-[0_8px_24px_rgba(37,99,235,0.15)]'
+                          : 'border-border-main hover:border-accent/40 hover:shadow-[0_8px_24px_rgba(26,25,22,0.08)]'
+                      }`}
+                      style={{ animationDelay: `${i * 60}ms` }}
+                      onClick={() => { sfx.tap(); setSelectedId(t.id); loadPreview(t.id); }}
+                    >
+                      {/* Thumbnail */}
+                      <div className="h-32 bg-gradient-to-br from-slate-100 to-slate-200 flex items-center justify-center overflow-hidden relative">
+                        {previewId === t.id && previewLoading ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-ink-tertiary" />
+                        ) : previewId === t.id && previewHtml ? (
+                          <iframe
+                            srcDoc={previewHtml}
+                            className="w-full h-full border-0 scale-50 origin-top-left"
+                            style={{ width: '200%', height: '200%' }}
+                            title="preview"
+                          />
+                        ) : (
+                          <Layout className="w-8 h-8 text-slate-400" />
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+
+                      {/* Card body */}
+                      <div className="p-3 flex flex-col gap-2 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold font-sans text-ink truncate">{t.name}</p>
+                            <p className="text-[11px] text-ink-secondary font-sans">{t.niche}</p>
+                          </div>
+                          {deleteConfirmId === t.id ? (
+                            <div className="flex gap-1 shrink-0">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDelete(t.id); }}
+                                disabled={deleting}
+                                className="w-7 h-7 rounded-full bg-danger text-white flex items-center justify-center text-[10px] font-bold"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); sfx.close(); setDeleteConfirmId(null); }}
+                                className="w-7 h-7 rounded-full bg-border-main text-ink-secondary flex items-center justify-center"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); sfx.tap(); setDeleteConfirmId(t.id); }}
+                              className="w-7 h-7 rounded-full opacity-0 group-hover:opacity-100 bg-danger/10 text-danger flex items-center justify-center transition-all hover:bg-danger/20"
+                              title="Delete template"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); sfx.engage(); onUseTemplate(t); }}
+                          className="w-full mt-auto inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-white text-xs font-semibold font-sans hover:bg-accent/90 active:scale-[0.98] transition-all"
+                        >
+                          Use Template
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Add Download and Trash2 to the main lucide import at the top of this file

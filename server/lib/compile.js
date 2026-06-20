@@ -5,6 +5,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TEMPLATES_RAW_DIR } from './config.js';
+import { db } from './db.js';
 
 // Maps a niche (case-insensitive) to its raw template file name.
 export const NICHE_TEMPLATE_MAP = {
@@ -105,8 +106,31 @@ function applyPlaceholders(html, placeholders) {
   );
 }
 
+// Find a custom template by its DB id or its unique slug.
+function findCustomTemplate(idOrSlug) {
+  return db.prepare(
+    'SELECT * FROM custom_templates WHERE id = ? OR slug = ? LIMIT 1',
+  ).get(idOrSlug, idOrSlug);
+}
+
 // Compile a single personalized page. Returns { html, placeholders, templateFile }.
+// Checks custom_templates DB first, then falls back to the built-in /public/templates-raw/ files.
 export async function compileSite(biz, nicheOrFile) {
+  // 1. Try custom template (by explicit ID/slug passed as nicheOrFile)
+  const custom = findCustomTemplate(nicheOrFile);
+  if (custom) {
+    const html = applyPlaceholders(custom.raw_html, buildPlaceholders(biz));
+    const leftovers = html.match(PLACEHOLDER_RE);
+    if (leftovers && leftovers.length) {
+      const unique = [...new Set(leftovers)];
+      throw new Error(
+        `Compilation incomplete for "${biz.name}". Unresolved placeholders: ${unique.join(', ')}`,
+      );
+    }
+    return { html, placeholders: buildPlaceholders(biz), templateFile: `custom:${custom.id}` };
+  }
+
+  // 2. Fall back to built-in niche template
   const templateFile = resolveTemplateFile(nicheOrFile || biz.niche);
   const rawPath = path.join(TEMPLATES_RAW_DIR, templateFile);
 
@@ -121,7 +145,6 @@ export async function compileSite(biz, nicheOrFile) {
   const html = applyPlaceholders(raw, placeholders);
 
   // Absolute safety rule: zero leftover {{UPPER_SNAKE}} placeholders allowed.
-  // (In-template JS like `{{${pName}}}` is intentionally left untouched.)
   const leftovers = html.match(PLACEHOLDER_RE);
   if (leftovers && leftovers.length) {
     const unique = [...new Set(leftovers)];

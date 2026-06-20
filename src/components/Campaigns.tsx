@@ -1,14 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Campaign, Template, Business, SmsLog } from '../types';
-import { 
-  Plus, Play, Pause, Trash2, Eye, ChevronRight, Upload, 
-  MapPin, Sliders, CheckCircle, Smartphone, SlidersHorizontal, Loader2, Sparkles, Check, Minus, Info, Users, Star, X, ShieldAlert, Send, Globe, Key, Compass, ShieldCheck
+import {
+  Plus, Play, Pause, Trash2, Eye, ChevronRight, Upload,
+  MapPin, Sliders, CheckCircle, Smartphone, SlidersHorizontal, Loader2, Sparkles, Check, Minus, Info, Users, Star, X, ShieldAlert, Send, Globe, Key, Compass, ShieldCheck, Layout
 } from 'lucide-react';
 import { nicheList } from '../data';
 import { getTemplateContent, getNicheBgImage } from './Templates';
 import { playGentleChime, playLaunchSwell, playVictoryCelebration, playSoftTap, playSoftBubble, playElegantBell, playSlideTick, playElegantError, playTiktokLike } from '../utils/audio';
 import { CelebrationEffect } from './CelebrationEffect';
-import { validateCsvFile, runCampaign, PipelineLead, PipelineResultRow, CsvValidation } from '../lib/pipelineClient';
+import { validateCsvFile, runCampaign, PipelineLead, PipelineResultRow, CsvValidation, listCustomTemplates, CustomTemplate } from '../lib/pipelineClient';
 
 interface CampaignsProps {
   campaigns: Campaign[];
@@ -356,6 +356,14 @@ export const Campaigns: React.FC<CampaignsProps> = ({
   const [findingsLoaded, setFindingsLoaded] = useState<boolean>(true);
   const [isFinding, setIsFinding] = useState<boolean>(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('t1');
+  const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
+
+  // Load custom templates on mount so they're available in the wizard picker.
+  useEffect(() => {
+    listCustomTemplates()
+      .then(setCustomTemplates)
+      .catch(() => setCustomTemplates([]));
+  }, []);
   const [campaignName, setCampaignName] = useState<string>('Toronto Barbers May Campaign');
   const [targetSmsCount, setTargetSmsCount] = useState<number>(10);
 
@@ -732,6 +740,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
         {
           businesses: leads,
           niche: selectedNiche,
+          templateId: selectedTemplateId,
           smsTemplate: smsText,
           name: campaignName || `${selectedNiche} CSV Outreach`,
           ownerKey,
@@ -2189,7 +2198,79 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                     <p className="text-xs text-ink-secondary">Selected template will format the generated websites dynamically using the local data discovered.</p>
                   </div>
 
+                  {/* Built-in vs My Templates tab */}
+                  <div className="flex items-center gap-1 p-1 bg-off-white border border-border-main rounded-xl w-fit">
+                    <button
+                      onClick={() => { playSlideTick(); }}
+                      className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold font-sans transition-all ${
+                        true ? 'bg-white text-ink shadow-sm' : 'text-ink-secondary hover:text-ink'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Built-in Templates
+                    </button>
+                    {customTemplates.length > 0 && (
+                      <button
+                        onClick={() => { playSlideTick(); }}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold font-sans transition-all text-ink-secondary hover:text-ink relative"
+                      >
+                        <Layout className="w-3.5 h-3.5" />
+                        My Templates
+                        <span className="inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-accent text-white text-[10px] font-bold">
+                          {customTemplates.length}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pt-2">
+                    {/* Custom templates first */}
+                    {customTemplates.map((temp) => {
+                      const isSel = selectedTemplateId === temp.id;
+                      return (
+                        <div
+                          key={temp.id}
+                          className={`rounded-lg border overflow-hidden cursor-pointer transition-all shadow-xs relative flex flex-col bg-white ${
+                            isSel ? 'border-violet-500 ring-1 ring-violet-500' : 'border-border-light hover:border-violet-400 hover:shadow-md'
+                          }`}
+                          onClick={() => { playElegantBell(); setSelectedTemplateId(temp.id); }}
+                        >
+                          {/* Custom template badge */}
+                          <div className="absolute top-2.5 left-2.5 z-10">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-violet-500 text-white">
+                              <Sparkles className="w-2.5 h-2.5" /> AI
+                            </span>
+                          </div>
+                          {/* Colored placeholder preview */}
+                          <div className="h-44 bg-gradient-to-br from-violet-100 to-indigo-100 flex items-center justify-center relative overflow-hidden">
+                            <div className="absolute inset-0 opacity-20">
+                              <div className="absolute top-6 left-6 right-6 h-6 bg-violet-300/60 rounded" />
+                              <div className="absolute top-16 left-6 w-24 h-3 bg-violet-200/60 rounded" />
+                              <div className="absolute top-22 left-6 right-6 h-2 bg-violet-200/40 rounded" />
+                              <div className="absolute bottom-6 left-6 right-6 grid grid-cols-3 gap-2">
+                                {[0,1,2].map(j => <div key={j} className="h-8 bg-violet-200/40 rounded" />)}
+                              </div>
+                            </div>
+                            <div className="relative text-center px-4">
+                              <p className="text-sm font-bold font-sans text-violet-700">{temp.name}</p>
+                              <p className="text-[10px] text-violet-500 font-sans mt-0.5">{temp.niche}</p>
+                            </div>
+                          </div>
+                          <div className="p-3 flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold font-sans text-ink">{temp.name}</p>
+                              <p className="text-[10px] text-ink-secondary font-sans">{temp.niche}</p>
+                            </div>
+                            {isSel && (
+                              <div className="w-5 h-5 rounded-full bg-violet-500 text-white flex items-center justify-center">
+                                <Check className="w-3 h-3" />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Built-in templates */}
                     {templates.filter(t => t.niche === selectedNiche).map((temp) => {
                       const isSel = selectedTemplateId === temp.id;
                       const content = getTemplateContent(temp.id, temp.name, temp.niche);

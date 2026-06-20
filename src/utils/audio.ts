@@ -483,9 +483,41 @@ export function playElegantError() {
     gainNode.gain.linearRampToValueAtTime(0.08, now + delay + 0.02);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.22);
 
-    osc.start(now + delay);
-    osc.stop(now + delay + 0.25);
+  osc.start(now + delay);
+  osc.stop(now + delay + 0.25);
   });
 }
 
+/**
+ * Plays a magic whoosh — ascending triangle sweep for when AI begins
+ * generating a template. Feels like a wand cast.
+ */
+export function playMagicWhoosh() {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  const gainNode = ctx.createGain();
+
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(400, now);
+  osc.frequency.exponentialRampToValueAtTime(1200, now + 0.22);
+
+  filter.type = 'lowpass';
+  filter.frequency.setValueAtTime(600, now);
+  filter.frequency.exponentialRampToValueAtTime(2000, now + 0.22);
+
+  osc.connect(filter);
+  filter.connect(gainNode);
+  gainNode.connect(ctx.destination);
+
+  gainNode.gain.setValueAtTime(0, now);
+  gainNode.gain.linearRampToValueAtTime(0.06, now + 0.03);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+
+  osc.start(now);
+  osc.stop(now + 0.3);
+}
 
