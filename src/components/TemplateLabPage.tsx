@@ -79,8 +79,12 @@ export const TemplateLabPage: React.FC<{
 }> = ({ aiEnabled, onClose, onBrowseTemplates, flashToast }) => {
 
   const [mode, setMode] = useState<'idle' | 'active'>('idle');
+  // html = raw HTML with {{PLACEHOLDERS}} — never shown directly in preview
   const [html, setHtml] = useState('');
+  // previewHtml = compiled HTML with demo values — shown in the iframe
   const [previewHtml, setPreviewHtml] = useState('');
+  // thinkingAcc = live thinking output from the AI (shown as animated text)
+  const [thinkingAcc, setThinkingAcc] = useState('');
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -124,6 +128,52 @@ export const TemplateLabPage: React.FC<{
     setLabError(msg);
     setTimeout(() => setLabError(null), 5000);
   };
+
+  // ---------------------------------------------------------------------------
+  // Helpers: compile preview HTML and summarize changes
+  // ---------------------------------------------------------------------------
+
+  const PLACEHOLDER_MAP: Record<string, string> = {
+    BUSINESS_NAME: 'Radiant Smiles Dental',
+    BUSINESS_NAME_SHORT: 'Radiant',
+    CITY: 'Austin, TX',
+    STATE: 'TX',
+    PHONE_DISPLAY: '(512) 555-0199',
+    PHONE_RAW: '5125550199',
+    EMAIL: 'hello@example.com',
+    ADDRESS: '3801 Capital of Texas Hwy, Austin, TX',
+    GOOGLE_RATING: '4.9',
+    GOOGLE_REVIEW_COUNT: '342',
+    INSTAGRAM_HANDLE: 'radiant_smiles',
+    FACEBOOK_URL: 'https://facebook.com/radiantsmiles',
+    YEARS_IN_BUSINESS: '2012',
+    DOCTOR_NAME: 'Dr. Alex Rivera',
+    AVERAGE_RATING: '4.9',
+    MEMBERS_COUNT: '1,200',
+    TRAINERS_COUNT: '8',
+    SITE_URL: 'https://example.com',
+  };
+
+  /** Replace all {{PLACEHOLDERS}} with demo values for the iframe preview. */
+  function compilePreview(rawHtml: string): string {
+    if (!rawHtml || typeof rawHtml !== 'string') return rawHtml;
+    return rawHtml.replace(/\{\{(\w+)\}\}/g, (_, key) =>
+      key in PLACEHOLDER_MAP ? PLACEHOLDER_MAP[key] : `{{${key}}}`,
+    );
+  }
+
+  /** Brief one-line summary of what the AI changed, for the chat message. */
+  function summarizeHtml(rawHtml: string): string {
+    if (!rawHtml || typeof rawHtml !== 'string') return 'Done! Preview updated.';
+    const hasPlaceholders = rawHtml.includes('{{');
+    const titleMatch = rawHtml.match(/<title>([^<]{0,60})/i);
+    const bodySnippet = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const parts: string[] = [];
+    if (hasPlaceholders) parts.push('Personalization ready');
+    if (titleMatch) parts.push(`Title: "${titleMatch[1].trim()}"`);
+    if (parts.length === 0 && bodySnippet) parts.push(bodySnippet + '\u2026');
+    return parts.length > 0 ? parts.join(' \u00b7 ') : 'Done! Preview updated.';
+  }
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -186,33 +236,56 @@ export const TemplateLabPage: React.FC<{
     setStreaming(true);
     setMode('active');
     setLabError(null);
+    setThinkingAcc('');
+
     try {
       const base = html || BLANK_CANVAS;
       const result = await streamAiEdit(
         { html: base, instruction, history: history_msgs, anthropicApiKey: apiKey.trim() || undefined },
         (fullSoFar) => {
           setHtml(fullSoFar);
+          // Compile preview: replace {{PLACEHOLDERS}} with demo values for the iframe
+          const compiled = compilePreview(fullSoFar);
           const now = Date.now();
           if (now - lastPush.current > 400) {
             lastPush.current = now;
-            setPreviewHtml(fullSoFar);
+            setPreviewHtml(compiled);
           }
         },
+        (thinkingText) => {
+          // Show AI thinking in the chat as it happens
+          setThinkingAcc(prev => prev + thinkingText);
+        },
       );
+
+      // Final compile for preview
+      const finalCompiled = compilePreview(result);
       setHtml(result);
-      setPreviewHtml(result);
+      setPreviewHtml(finalCompiled);
+      setThinkingAcc('');
+
+      const summary = summarizeHtml(result);
       setMessages(m => {
         const next = [...m];
-        next[next.length - 1] = { role: 'assistant', content: 'Done! Preview updated below. Keep editing or save as a template.' };
+        next[next.length - 1] = {
+          role: 'assistant',
+          content: summary || 'Done! Preview updated. Keep editing or save as a template.',
+        };
         return next;
       });
       sfx.aiDone();
       try {
-        const entry = await createSiteHistory({ title: title || instruction.slice(0, 40), niche, html: result, snapshotLabel: instruction.slice(0, 60) });
+        const entry = await createSiteHistory({
+          title: title || instruction.slice(0, 40),
+          niche,
+          html: result,
+          snapshotLabel: instruction.slice(0, 60),
+        });
         setHistory(prev => [entry as any, ...prev]);
       } catch { /* ignore */ }
     } catch (err: any) {
       sfx.error();
+      setThinkingAcc('');
       setMessages(m => {
         const next = [...m];
         next[next.length - 1] = { role: 'assistant', content: 'Error: ' + (err?.message || 'Generation failed.') };
@@ -419,21 +492,41 @@ export const TemplateLabPage: React.FC<{
             )}
           </div>
 
+          {/* ---- How it works — feature cards ---- */}
+          <div className="px-4 pt-3 pb-2 border-b border-border-light">
+            <span className="text-[11px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">How it works</span>
+            <div className="mt-2 space-y-1.5">
+              {[
+                { icon: String.fromCodePoint(0x270F, 0xFE0F), label: 'Describe your site', hint: 'e.g. Modern dental clinic with amber tones' },
+                { icon: String.fromCodePoint(0x1F3AF), label: 'AI builds instantly', hint: 'Live preview updates as AI writes' },
+                { icon: String.fromCodePoint(0x1F4C1), label: 'Save as template', hint: 'Convert to reusable Lunao template' },
+              ].map(f => (
+                <div key={f.label} className="flex items-start gap-2 px-3 py-2 rounded-xl bg-off-white">
+                  <span className="text-base leading-none mt-0.5">{f.icon}</span>
+                  <div>
+                    <p className="text-[11px] font-semibold font-sans text-ink leading-tight">{f.label}</p>
+                    <p className="text-[10px] font-sans text-ink-tertiary leading-tight mt-0.5">{f.hint}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* ---- Previous Builds ---- */}
           <div className="px-4 py-3 border-b border-border-light">
             <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[11px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Previous Builds</span>
-              <span className="text-[11px] font-sans text-ink-tertiary">{history.length}</span>
+              <span className="text-[11px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Recent Builds</span>
+              <span className="text-[11px] font-sans text-ink-tertiary">{history.length > 0 ? history.length : ''}</span>
             </div>
-            <div className="space-y-1 max-h-36 overflow-y-auto">
+            <div className="space-y-1 max-h-32 overflow-y-auto scrollbar-none">
               {loadingHistory ? (
                 <div className="flex items-center justify-center py-3">
                   <Loader2 className="w-4 h-4 animate-spin text-ink-tertiary" />
                 </div>
               ) : history.length === 0 ? (
-                <p className="text-[11px] text-ink-tertiary font-sans italic text-center py-2">No builds yet \u2014 start below</p>
+                <p className="text-[11px] text-ink-tertiary font-sans italic text-center py-2">Your recent builds will appear here</p>
               ) : (
-                history.slice(0, 8).map(entry => (
+                history.slice(0, 6).map(entry => (
                   <button
                     key={entry.id}
                     onClick={() => loadEntry(entry)}
@@ -442,7 +535,7 @@ export const TemplateLabPage: React.FC<{
                     <p className="text-xs font-semibold font-sans text-ink group-hover:text-accent truncate">
                       {entry.title || entry.snapshotLabel || 'Build'}
                     </p>
-                    <p className="text-[10px] font-sans text-ink-tertiary mt-0.5">{relTime(entry.createdAt)} \u00b7 {entry.niche}</p>
+                    <p className="text-[10px] font-sans text-ink-tertiary mt-0.5">{relTime(entry.createdAt)} · {entry.niche}</p>
                   </button>
                 ))
               )}
@@ -512,12 +605,22 @@ export const TemplateLabPage: React.FC<{
                 </div>
               </div>
             ))}
-            {streaming && messages[messages.length - 1]?.role !== 'user' && (
+            {streaming && (
               <div className="flex justify-start">
                 <div className="max-w-[92%] rounded-2xl px-3.5 py-2.5 bg-off-white border border-border-light rounded-bl-sm">
-                  <span className="inline-flex items-center gap-1 text-[12px] text-ink-tertiary font-sans animate-pulse">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> AI is writing\u2026
-                  </span>
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                    <span className="text-[11px] text-accent font-semibold font-sans">Thinking</span>
+                  </div>
+                  {thinkingAcc ? (
+                    <p className="text-[11px] text-ink-secondary font-sans leading-relaxed italic">
+                      {thinkingAcc.slice(-300)}
+                    </p>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[12px] text-ink-tertiary font-sans animate-pulse">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Preparing…
+                    </span>
+                  )}
                 </div>
               </div>
             )}

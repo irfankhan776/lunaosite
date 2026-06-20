@@ -371,9 +371,16 @@ app.post('/api/ai/edit', async (req, res) => {
 
   try {
     send({ type: 'start' });
-    const full = await streamEdit({ html, instruction, history, anthropicApiKey }, (delta) => {
-      send({ type: 'chunk', delta });
-    });
+    const full = await streamEdit(
+      { html, instruction, history, anthropicApiKey },
+      (delta, isThinking) => {
+        if (isThinking) {
+          send({ type: 'thinking', delta });
+        } else {
+          send({ type: 'chunk', delta });
+        }
+      },
+    );
     send({ type: 'done', html: cleanHtmlOutput(full) });
   } catch (err) {
     send({ type: 'error', error: err.message });

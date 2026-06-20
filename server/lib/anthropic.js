@@ -20,13 +20,33 @@ export function isAiEnabled() {
 
 const SYSTEM_PROMPT = `You are an elite front-end engineer editing a single self-contained HTML page for a local business website (the page already has inline <style> and any needed <script>).
 
-RULES — follow exactly:
-1. You will be given the CURRENT full HTML of the page and an edit instruction.
-2. Apply ONLY the requested change while keeping everything else byte-for-byte identical.
-3. Preserve the overall structure, design system, fonts, colors, and responsiveness. The site must stay mobile-consistent, desktop-consistent, and brand-consistent.
-4. Keep the page fully self-contained (inline CSS/JS, no external build steps).
-5. Never invent broken links or remove existing sections unless explicitly asked.
-6. Output the COMPLETE updated HTML document and NOTHING else — no explanations, no markdown fences, no commentary. Start at <!DOCTYPE html> (or <html>) and end at </html>.`;
+CRITICAL — your job is to make MINIMAL, PRECISE changes while keeping everything else IDENTICAL.
+
+ABSOLUTE RULES — never break these:
+1. You will receive the CURRENT full HTML and an edit instruction.
+2. Apply ONLY the requested change. Leave everything else exactly as-is.
+3. NEVER remove, reorder, or restructure HTML elements, CSS classes, or JavaScript unless explicitly asked.
+4. NEVER add placeholder tokens like {{BUSINESS_NAME}} or {{CITY}} unless the user EXPLICITLY asks for them.
+5. NEVER wrap content in extra <div> wrappers or change the existing DOM structure.
+6. NEVER change the <title> tag unless the user explicitly asks.
+7. The page must remain fully self-contained (inline CSS/JS). Never remove inline styles.
+8. If the user's instruction is vague (e.g. "make it better"), make only TINY improvements — one small CSS color tweak, or one copy change. Do NOT rewrite the whole page.
+9. If you're unsure what something is in the HTML, leave it completely unchanged.
+
+WHAT TO DO:
+- Small text/color changes: modify only the specific inline style or CSS rule
+- Content edits: change only the specific text node
+- Adding sections: append new HTML at the end of <body> only
+- Removing sections: only if explicitly asked
+
+WHAT NOT TO DO:
+- Do NOT rewrite the entire CSS
+- Do NOT restructure the <header>, <nav>, <main>, or <footer>
+- Do NOT add placeholder tokens ({{BRAND_NAME}}, {{CITY}}, etc.)
+- Do NOT add new CSS variables unless adding a new feature
+
+OUTPUT: The COMPLETE updated HTML document and NOTHING else.
+No explanations. No markdown fences. No commentary. Start at <!DOCTYPE html> and end at </html>.`;
 
 function buildUserContent(html, instruction, history = []) {
   const convo = (history || [])
@@ -345,7 +365,8 @@ export async function generateTemplateHtml(prompt, niche = 'Local Business', api
 }
 
 /**
- * Stream an AI edit. Calls onChunk(textDelta) as tokens arrive.
+ * Stream an AI edit. Calls onChunk(textDelta, isThinking?) as tokens arrive.
+ * onChunk receives (delta, true) for thinking tokens, (delta, false) for output tokens.
  * Returns the full accumulated text when done.
  * If anthropicApiKey is provided it takes precedence over the server key.
  */
@@ -363,9 +384,23 @@ export async function streamEdit({ html, instruction, history, anthropicApiKey }
   });
 
   let full = '';
-  stream.on('text', (delta) => {
-    full += delta;
-    if (onChunk) onChunk(delta);
+  let inThinkingBlock = false;
+  stream.on('contentblockstart', ({ index, type }) => {
+    if (type === 'thinking') inThinkingBlock = true;
+  });
+  stream.on('contentblockstop', ({ index }) => {
+    inThinkingBlock = false;
+  });
+  stream.on('contentblockdelta', ({ delta, index }) => {
+    if (delta.type === 'thinking_api_response') {
+      const text = delta.thinking || '';
+      full += text;
+      if (onChunk) onChunk(text, true); // thinking
+    } else if (delta.type === 'text') {
+      const text = delta.text || '';
+      full += text;
+      if (onChunk) onChunk(text, false); // output
+    }
   });
 
   await stream.finalMessage();

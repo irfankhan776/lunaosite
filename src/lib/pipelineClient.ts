@@ -588,9 +588,11 @@ export async function getSmsStatus(): Promise<{
 
 // Stream an AI edit. onChunk receives the growing full HTML as it's written so
 // the editor can refresh its live preview in real time. Resolves with final HTML.
+// onThinking receives thinking/analysis text chunks while the AI is working.
 export async function streamAiEdit(
   params: { html: string; instruction: string; history?: AiChatMessage[]; anthropicApiKey?: string },
   onChunk: (fullHtmlSoFar: string, delta: string) => void,
+  onThinking?: (text: string) => void,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/api/ai/edit`, {
     method: 'POST',
@@ -621,15 +623,16 @@ export async function streamAiEdit(
         if (event.type === 'chunk') {
           acc += event.delta || '';
           onChunk(acc, event.delta || '');
+        } else if (event.type === 'thinking') {
+          if (onThinking) onThinking(event.delta || '');
         } else if (event.type === 'done') {
           finalHtml = event.html || acc;
         } else if (event.type === 'error') {
           throw new Error(event.error || 'AI edit failed');
         }
       } catch (err) {
-        if (err instanceof Error && err.message !== 'Unexpected end of JSON input') {
-          if (!(err instanceof SyntaxError)) throw err;
-        }
+        if (err instanceof SyntaxError) continue; // skip malformed JSON lines
+        throw err;
       }
     }
   }
