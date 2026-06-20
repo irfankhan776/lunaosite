@@ -799,8 +799,9 @@ export async function getTemplatePreview(id: string): Promise<{ html: string; na
 }
 
 // Generate a new template via AI. Pass onChunk to stream preview updates.
+// Pass anthropicApiKey if the user provided their own key.
 export async function generateTemplate(
-  params: { prompt: string; niche?: string; categoryId?: string | null; name?: string; ownerKey?: string },
+  params: { prompt: string; niche?: string; categoryId?: string | null; name?: string; ownerKey?: string; anthropicApiKey?: string },
   onChunk?: (htmlSoFar: string) => void,
 ): Promise<{ id: string; name: string; slug: string; niche: string }> {
   const res = await fetch(`${API_BASE}/api/custom-templates/generate`, {
@@ -816,6 +817,14 @@ export async function generateTemplate(
     (err as any).needed = data.needed;
     (err as any).available = data.available;
     (err as any).status = 402;
+    throw err;
+  }
+
+  // Handle invalid API key
+  if (res.status === 401) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error || 'Your Anthropic key is invalid. Please check it and try again.');
+    (err as any).status = 401;
     throw err;
   }
 

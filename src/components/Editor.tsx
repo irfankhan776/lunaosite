@@ -5,7 +5,7 @@ import {
   Rocket, AlertCircle, Pencil, CheckCircle2, Link2,
   Globe, Copy, Eye, Search, RefreshCw, Clock,
   Puzzle, MessageCircle, UserPlus, Sparkles,
-  Download, Trash2, Layout,
+  Download, Trash2, Layout, Key, ChevronDown,
 } from 'lucide-react';
 import {
   listSites, getSiteHtml, saveSiteHtml, deploySite, streamAiEdit,
@@ -478,7 +478,7 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
         </div>
 
         {/* Template Lab — AI-powered custom template creator */}
-        <TemplateLab
+        <TemplateLabBanner
           aiEnabled={aiEnabled}
           onBrowseTemplates={() => {
             sfx.open();
@@ -1175,15 +1175,14 @@ const SAMPLE_PROMPTS = [
 ];
 
 // Template Lab hero section — shown above the site grid in the Editor list view.
-const TemplateLab: React.FC<{
   aiEnabled: boolean;
   onBrowseTemplates: () => void;
   onCreateNew: () => void;
 }> = ({ aiEnabled, onBrowseTemplates, onCreateNew }) => (
-  <div className="relative mb-8 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A1916] via-[#2A2925] to-[#1A1916] animate-sparkle-in">
+  <div className="relative mb-8 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A1916] via-[#252320] to-[#1A1916] border border-white/10 animate-sparkle-in">
     {/* Ambient glow */}
-    <div className="pointer-events-none absolute -top-20 -right-20 w-72 h-72 bg-accent/20 rounded-full blur-3xl" />
-    <div className="pointer-events-none absolute -bottom-16 -left-16 w-56 h-56 bg-violet-500/10 rounded-full blur-2xl" />
+    <div className="pointer-events-none absolute -top-20 -right-20 w-72 h-72 bg-accent/15 rounded-full blur-3xl" />
+    <div className="pointer-events-none absolute -bottom-16 -left-16 w-56 h-56 bg-violet-500/8 rounded-full blur-2xl" />
 
     <div className="relative px-6 py-7 sm:px-8 sm:py-8 flex flex-col sm:flex-row sm:items-center gap-5">
       {/* Left — icon + copy */}
@@ -1201,9 +1200,9 @@ const TemplateLab: React.FC<{
           Describe a business type and style in plain English. AI generates a complete template — no code required.
         </p>
         {!aiEnabled && (
-          <div className="flex items-center gap-1.5 mt-2 text-[11px] text-amber-400/80 font-sans">
-            <AlertCircle className="w-3.5 h-3.5" />
-            AI generation needs an Anthropic key on the server.
+          <div className="flex items-start gap-1.5 mt-2 text-[11px] text-amber-400/80 font-sans">
+            <Key className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>No server key configured — bring your own Anthropic key to generate templates.</span>
           </div>
         )}
       </div>
@@ -1219,8 +1218,7 @@ const TemplateLab: React.FC<{
         </button>
         <button
           onClick={onCreateNew}
-          disabled={!aiEnabled}
-          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all"
         >
           <Wand2 className="w-4 h-4" />
           Create New
@@ -1260,6 +1258,8 @@ const CreateTemplateModal: React.FC<{
   const [categories, setCategories] = useState<{ id: string; name: string; color: string }[]>([]);
   const [loadingCats, setLoadingCats] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [anthropicApiKey, setAnthropicApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
   const [previewHtml, setPreviewHtml] = useState('');
   const [generatedTemplate, setGeneratedTemplate] = useState<{ id: string; name: string; slug: string; niche: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1298,6 +1298,8 @@ const CreateTemplateModal: React.FC<{
     setError(null);
     setSaving(false);
     setShowNewCat(false);
+    setAnthropicApiKey('');
+    setShowApiKey(false);
   };
 
   useEffect(() => {
@@ -1335,6 +1337,7 @@ const CreateTemplateModal: React.FC<{
         niche: activeNiche,
         categoryId: catId,
         name: name.trim() || undefined,
+        anthropicApiKey: anthropicApiKey.trim() || undefined,
       });
 
       setGeneratedTemplate(result);
@@ -1349,6 +1352,8 @@ const CreateTemplateModal: React.FC<{
       const msg = err?.message || 'Generation failed. Please try again.';
       if (err?.status === 402) {
         setError(`Insufficient credits. ${msg}`);
+      } else if (err?.status === 401) {
+        setError('Your Anthropic key is invalid. Please check it and try again. Get your key at console.anthropic.com');
       } else {
         setError(msg);
       }
@@ -1521,6 +1526,47 @@ const CreateTemplateModal: React.FC<{
                       className="flex-1 px-3 py-1.5 rounded-lg border border-border-main bg-white text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent"
                       autoFocus
                     />
+                  </div>
+                )}
+              </div>
+
+              {/* Anthropic API Key — collapsible */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => { sfx.tap(); setShowApiKey((v) => !v); }}
+                  className="flex items-center gap-1.5 text-[11px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  {showApiKey ? 'Hide' : 'Add'} your Anthropic API key
+                  <span className="text-ink-tertiary font-normal ml-0.5">
+                    {anthropicApiKey.trim() ? '(key saved)' : aiEnabled ? '(optional — server key available)' : '(required — server has no key)'}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ml-0.5 ${showApiKey ? 'rotate-180' : ''}`} />
+                </button>
+                {showApiKey && (
+                  <div className="mt-2">
+                    <div className="relative">
+                      <input
+                        type="password"
+                        value={anthropicApiKey}
+                        onChange={(e) => setAnthropicApiKey(e.target.value)}
+                        placeholder="sk-ant-api03-…"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-border-main bg-white text-sm font-mono text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all pr-20"
+                      />
+                      <a
+                        href="https://console.anthropic.com/settings/keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-sans text-accent hover:text-accent/80 font-medium"
+                        title="Get your key at console.anthropic.com"
+                      >
+                        Get key
+                      </a>
+                    </div>
+                    <p className="mt-1.5 text-[10px] text-ink-tertiary font-sans leading-relaxed">
+                      Your key is sent directly to the server, never stored, and only used for this template generation. Cost: ~2,000–4,000 tokens (~1–3 cents per template) using Claude Sonnet 4.
+                    </p>
                   </div>
                 )}
               </div>

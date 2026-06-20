@@ -1241,11 +1241,11 @@ app.get('/api/custom-templates/:id/preview', authenticate, (req, res) => {
 });
 
 // Generate a new template via AI — THE CORE ENDPOINT.
-// Body: { prompt, niche, categoryId?, name?, ownerKey? }
+// Body: { prompt, niche, categoryId?, name?, ownerKey?, anthropicApiKey? }
 app.post('/api/custom-templates/generate', authenticate, async (req, res) => {
   try {
     const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query?.ownerKey || '').trim();
-    const { prompt, niche = 'Local Business', categoryId = null, name } = req.body || {};
+    const { prompt, niche = 'Local Business', categoryId = null, name, anthropicApiKey } = req.body || {};
 
     // Input validation
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 20) {
@@ -1267,12 +1267,18 @@ app.post('/api/custom-templates/generate', authenticate, async (req, res) => {
     let rawHtml, previewHtml;
     try {
       ({ rawHtml, previewHtml } = await import('./lib/anthropic.js').then((m) =>
-        m.generateTemplateHtml(prompt.trim(), niche),
+        m.generateTemplateHtml(prompt.trim(), niche, anthropicApiKey),
       ));
     } catch (genErr) {
       // Refund the 2 credits on AI failure
       refund(ownerKey, 2, 'template_gen_failed_refund', null);
       const msg = genErr instanceof Error ? genErr.message : 'Generation failed';
+      // Distinguish between missing key and invalid key
+      const isMissingKey = msg.includes('missing ANTHROPIC_API_KEY') || msg.includes('not configured');
+      const isInvalidKey = msg.includes('401') || msg.includes('invalid') || msg.includes('Unauthorized') || msg.includes('authentication_error');
+      if (isInvalidKey) {
+        return res.status(401).json({ ok: false, error: 'Your Anthropic key is invalid. Please check it and try again.' });
+      }
       return res.status(422).json({ ok: false, error: msg });
     }
 

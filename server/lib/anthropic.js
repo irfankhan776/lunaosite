@@ -5,11 +5,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { anthropic as anthropicCfg } from './config.js';
 
-let client = null;
+function buildClient(apiKey) {
+  return new Anthropic({ apiKey: apiKey || anthropicCfg.apiKey });
+}
+
 function getClient() {
   if (!anthropicCfg.live) return null;
-  if (!client) client = new Anthropic({ apiKey: anthropicCfg.apiKey });
-  return client;
+  return buildClient(anthropicCfg.apiKey);
 }
 
 export function isAiEnabled() {
@@ -255,15 +257,24 @@ YOUR JOB: If the user asks for something you can't represent with the allowed pl
  * Returns { rawHtml, previewHtml }.
  * rawHtml has {{PLACEHOLDERS}} — safe for campaign compilation.
  * previewHtml has demo values — safe for iframe preview.
+ *
+ * @param {string} prompt - The user's template description.
+ * @param {string} [niche='Local Business'] - Business niche for styling guidance.
+ * @param {string} [apiKey] - Optional user-provided Anthropic API key.
+ *   If not provided, falls back to the server's ANTHROPIC_API_KEY env var.
  */
-export async function generateTemplateHtml(prompt, niche = 'Local Business') {
-  const c = getClient();
-  if (!c) throw new Error('AI editor is not configured (missing ANTHROPIC_API_KEY).');
+export async function generateTemplateHtml(prompt, niche = 'Local Business', apiKey) {
+  // Allow user-supplied key; fall back to server-side key.
+  const hasUserKey = typeof apiKey === 'string' && apiKey.trim().length > 0;
+  if (!hasUserKey && !anthropicCfg.live) {
+    throw new Error('AI editor is not configured (missing ANTHROPIC_API_KEY). Add your Anthropic key below to generate templates.');
+  }
 
+  const client = hasUserKey ? buildClient(apiKey.trim()) : getClient();
   const allowedSet = detectAllowedPlaceholders(prompt);
   const systemPrompt = buildTemplateSystemPrompt(niche, allowedSet, prompt);
 
-  const stream = await c.messages.stream({
+  const stream = await client.messages.stream({
     model: anthropicCfg.model,
     max_tokens: 24000,
     system: systemPrompt,
