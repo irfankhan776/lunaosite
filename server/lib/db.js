@@ -221,6 +221,21 @@ const SCHEMA_SQL = `
     created_at   INTEGER NOT NULL,
     FOREIGN KEY (category_id) REFERENCES template_categories(id)
   );
+
+  CREATE TABLE IF NOT EXISTS site_history (
+    id               TEXT    PRIMARY KEY,
+    owner_key        TEXT    NOT NULL,
+    parent_slug      TEXT    NOT NULL,
+    title            TEXT    NOT NULL DEFAULT '',
+    niche            TEXT    NOT NULL DEFAULT '',
+    html             TEXT    NOT NULL,
+    snapshot_label   TEXT    NOT NULL DEFAULT '',
+    is_template      INTEGER NOT NULL DEFAULT 0,
+    template_id      TEXT,
+    template_name    TEXT,
+    created_at       INTEGER NOT NULL,
+    FOREIGN KEY (template_id) REFERENCES custom_templates(id)
+  );
 `;
 
 // ---------------------------------------------------------------------------

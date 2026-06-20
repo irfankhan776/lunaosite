@@ -1116,6 +1116,177 @@ app.post('/api/owner/sms', authenticate, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Site Studio — blank canvas → AI builds site → history + turn into template
+// ---------------------------------------------------------------------------
+
+// List site history (previous builds for a given slug).
+app.get('/api/site-history', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const { parentSlug } = req.query;
+    let sql = 'SELECT * FROM site_history WHERE owner_key = ? ORDER BY created_at DESC';
+    const params = [ownerKey];
+    if (parentSlug) {
+      sql = 'SELECT * FROM site_history WHERE owner_key = ? AND parent_slug = ? ORDER BY created_at DESC';
+      params.push(parentSlug);
+    }
+    const rows = db.prepare(sql).all(...params);
+    res.json({
+      ok: true,
+      history: rows.map((r) => ({
+        id: r.id,
+        parentSlug: r.parent_slug,
+        title: r.title,
+        niche: r.niche,
+        html: r.html,
+        snapshotLabel: r.snapshot_label,
+        isTemplate: Boolean(r.is_template),
+        templateId: r.template_id,
+        templateName: r.template_name,
+        createdAt: r.created_at,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Create a new site history entry (Studio saves after each AI generation).
+app.post('/api/site-history', authenticate, async (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query?.ownerKey || '').trim();
+    const { parentSlug, title = '', niche = '', html, snapshotLabel = '', templateId = null, templateName = null } = req.body || {};
+    if (!html || typeof html !== 'string') {
+      return res.status(400).json({ ok: false, error: 'html is required' });
+    }
+    const id = `hist_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      'INSERT INTO site_history (id, owner_key, parent_slug, title, niche, html, snapshot_label, is_template, template_id, template_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
+    ).run(id, ownerKey, parentSlug || `studio-${id}`, title, niche, html, snapshotLabel, templateId || null, templateName || null, now);
+    res.json({
+      ok: true,
+      entry: { id, parentSlug: parentSlug || `studio-${id}`, title, niche, snapshotLabel, isTemplate: false, templateId, templateName, createdAt: now },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Load a single history entry.
+app.get('/api/site-history/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const row = db.prepare('SELECT * FROM site_history WHERE id = ? AND owner_key = ?').get(req.params.id, ownerKey);
+    if (!row) return res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({
+      ok: true,
+      entry: {
+        id: row.id,
+        parentSlug: row.parent_slug,
+        title: row.title,
+        niche: row.niche,
+        html: row.html,
+        snapshotLabel: row.snapshot_label,
+        isTemplate: Boolean(row.is_template),
+        templateId: row.template_id,
+        templateName: row.template_name,
+        createdAt: row.created_at,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Turn a history entry into a named template (saves to custom_templates).
+app.post('/api/site-history/:id/convert-to-template', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.body?.ownerKey || req.query?.ownerKey || '').trim();
+    const { name, categoryId = null, niche = '', templateId: existingTemplateId = null } = req.body || {};
+
+    const row = db.prepare('SELECT * FROM site_history WHERE id = ? AND owner_key = ?').get(req.params.id, ownerKey);
+    if (!row) return res.status(404).json({ ok: false, error: 'History entry not found' });
+
+    const templateName = name?.trim() || `Template ${new Date().toLocaleDateString()}`;
+    const templateId = existingTemplateId || `tmpl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const slug = templateName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const now = Math.floor(Date.now() / 1000);
+
+    // Insert into custom_templates if not already a template
+    if (!row.is_template) {
+      // Save raw version (with {{PLACEHOLDERS}}) — extract placeholders from the HTML
+      const PLACEHOLDER_RE = /\{\{(\w+)\}\}/g;
+      const placeholdersUsed = [...new Set([...row.html.matchAll(PLACEHOLDER_RE)].map((m) => m[1]))];
+      const CORE = ['BUSINESS_NAME', 'CITY', 'PHONE_DISPLAY'];
+      const extras = placeholdersUsed.filter((p) => !CORE.includes(p));
+      const allPlaceholders = [...CORE, ...extras];
+
+      const DEMO_VALUES = {
+        BUSINESS_NAME: row.title || 'My Business',
+        CITY: 'Austin, TX',
+        PHONE_DISPLAY: '(512) 555-0000',
+        PHONE_RAW: '5125550000',
+        STATE: 'TX',
+        YEARS_IN_BUSINESS: '2012',
+        EMAIL: 'hello@example.com',
+        ADDRESS: '123 Main St',
+        GOOGLE_RATING: '4.8',
+        GOOGLE_REVIEW_COUNT: '120',
+        INSTAGRAM_HANDLE: 'mybiz',
+        FACEBOOK_URL: 'https://facebook.com/mybiz',
+        SITE_URL: 'https://example.com',
+        DOCTOR_NAME: 'Dr. Smith',
+        AVERAGE_RATING: '4.8',
+        MEMBERS_COUNT: '1,200',
+        TRAINERS_COUNT: '8',
+      };
+
+      const previewHtml = allPlaceholders.reduce(
+        (html, key) => html.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), DEMO_VALUES[key] || key),
+        row.html,
+      );
+
+      db.prepare(
+        `INSERT INTO custom_templates (id, owner_key, category_id, name, slug, niche, raw_html, preview_html, style_tags, used_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?)`,
+      ).run(templateId, ownerKey, categoryId || null, templateName, slug, niche || row.niche, row.html, previewHtml, now);
+
+      // Mark history entry as converted
+      db.prepare(
+        'UPDATE site_history SET is_template = 1, template_id = ?, template_name = ? WHERE id = ?',
+      ).run(templateId, templateName, req.params.id);
+    }
+
+    res.json({
+      ok: true,
+      template: {
+        id: templateId,
+        name: templateName,
+        slug,
+        niche: niche || row.niche,
+        categoryId: categoryId || null,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Delete a history entry.
+app.delete('/api/site-history/:id', authenticate, (req, res) => {
+  try {
+    const ownerKey = req.userId ? `user_${req.userId}` : String(req.query.ownerKey || '').trim();
+    const row = db.prepare('SELECT * FROM site_history WHERE id = ? AND owner_key = ?').get(req.params.id, ownerKey);
+    if (!row) return res.status(404).json({ ok: false, error: 'Not found' });
+    db.prepare('DELETE FROM site_history WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Template Lab — AI-powered custom template generation + management
 // ---------------------------------------------------------------------------
 

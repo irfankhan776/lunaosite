@@ -871,3 +871,107 @@ export async function deleteCustomTemplate(id: string, ownerKey?: string): Promi
     throw new Error(d.error || `Failed to delete template (${res.status})`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Site Studio — history + turn into template
+// ---------------------------------------------------------------------------
+
+export interface SiteHistoryEntry {
+  id: string;
+  parentSlug: string;
+  title: string;
+  niche: string;
+  html: string;
+  snapshotLabel: string;
+  isTemplate: boolean;
+  templateId: string | null;
+  templateName: string | null;
+  createdAt: number;
+}
+
+export interface ConvertToTemplateResult {
+  id: string;
+  name: string;
+  slug: string;
+  niche: string;
+  categoryId: string | null;
+}
+
+// List site history entries.
+export async function listSiteHistory(parentSlug?: string): Promise<SiteHistoryEntry[]> {
+  const qs = parentSlug ? `?parentSlug=${encodeURIComponent(parentSlug)}` : '';
+  const res = await fetch(`${API_BASE}/api/site-history${qs}`);
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to load site history (${res.status})`);
+  }
+  const d = await res.json();
+  return d.history as SiteHistoryEntry[];
+}
+
+// Create a site history entry (Studio auto-saves after each AI generation).
+export async function createSiteHistory(params: {
+  parentSlug?: string;
+  title?: string;
+  niche?: string;
+  html: string;
+  snapshotLabel?: string;
+}): Promise<{ id: string; parentSlug: string }> {
+  const res = await fetch(`${API_BASE}/api/site-history`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to save history (${res.status})`);
+  }
+  const d = await res.json();
+  return d.entry as { id: string; parentSlug: string };
+}
+
+// Load a single history entry.
+export async function getSiteHistory(id: string): Promise<SiteHistoryEntry> {
+  const res = await fetch(`${API_BASE}/api/site-history/${encodeURIComponent(id)}`);
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to load history entry (${res.status})`);
+  }
+  const d = await res.json();
+  return d.entry as SiteHistoryEntry;
+}
+
+// Turn a history entry into a named template.
+export async function convertHistoryToTemplate(params: {
+  historyId: string;
+  name: string;
+  categoryId?: string | null;
+  niche?: string;
+}): Promise<ConvertToTemplateResult> {
+  const res = await fetch(`${API_BASE}/api/site-history/${encodeURIComponent(params.historyId)}/convert-to-template`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: params.name,
+      categoryId: params.categoryId ?? null,
+      niche: params.niche ?? '',
+    }),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to convert to template (${res.status})`);
+  }
+  const d = await res.json();
+  return d.template as ConvertToTemplateResult;
+}
+
+// Delete a history entry.
+export async function deleteSiteHistory(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/site-history/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.error || `Failed to delete history (${res.status})`);
+  }
+}

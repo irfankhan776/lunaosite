@@ -51,6 +51,7 @@ const TABLES = [
   'sms_inbound',
   'template_categories',
   'custom_templates',
+  'site_history',
 ];
 
 let totalRows = 0;

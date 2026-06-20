@@ -6,12 +6,16 @@ import {
   Globe, Copy, Eye, Search, RefreshCw, Clock,
   Puzzle, MessageCircle, UserPlus, Sparkles,
   Download, Trash2, Layout, Key, ChevronDown,
+  History, FolderOpen, Eraser, Shuffle, FlaskConical, BookmarkPlus,
+  FileCode, RotateCcw, Check, ChevronRight, PanelLeftOpen, PanelRightOpen,
 } from 'lucide-react';
 import {
   listSites, getSiteHtml, saveSiteHtml, deploySite, streamAiEdit,
   getAddons, setAddons, SiteAddons,
   EditorSite, AiChatMessage,
   listInviteCodes, InviteCode,
+  listSiteHistory, createSiteHistory, convertHistoryToTemplate,
+  SiteHistoryEntry,
 } from '../lib/pipelineClient';
 import {
   playSoftTap, playTiktokLike, playSlideTick, playDialogPop, playSoftBubble,
@@ -119,6 +123,29 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
   // Template Lab state
   const [createOpen, setCreateOpen] = useState(false);
   const [browseOpen, setBrowseOpen] = useState(false);
+
+  // Studio — AI Site Builder
+  const [studioOpen, setStudioOpen] = useState(false);
+  const [studioStep, setStudioStep] = useState<'canvas' | 'generating' | 'editing' | 'saving'>('canvas');
+  const [studioHtml, setStudioHtml] = useState('');
+  const [studioMessages, setStudioMessages] = useState<AiChatMessage[]>([]);
+  const [studioInput, setStudioInput] = useState('');
+  const [studioStreaming, setStudioStreaming] = useState(false);
+  const [studioHistory, setStudioHistory] = useState<SiteHistoryEntry[]>([]);
+  const [studioPreviewId, setStudioPreviewId] = useState<string | null>(null);
+  const [studioTitle, setStudioTitle] = useState('');
+  const [studioNiche, setStudioNiche] = useState('');
+  const [studioPrompt, setStudioPrompt] = useState('');
+  const [studioSaveOpen, setStudioSaveOpen] = useState(false);
+  const [studioSaveName, setStudioSaveName] = useState('');
+  const [studioSaveCategory, setStudioSaveCategory] = useState<string | null>(null);
+  const [studioSaveNewCat, setStudioSaveNewCat] = useState('');
+  const [studioSaveNewCatColor, setStudioSaveNewCatColor] = useState('#2563EB');
+  const [studioSaving, setStudioSaving] = useState(false);
+  const [studioCategories, setStudioCategories] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [studioShowNewCat, setStudioShowNewCat] = useState(false);
+  const studioIframeRef = useRef<HTMLIFrameElement>(null);
+  const studioLastPreviewPush = useRef(0);
 
   // AI chat
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -431,6 +458,496 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
   };
 
   // ===========================================================================
+  // STUDIO — AI Site Builder
+  // ===========================================================================
+
+  const openStudio = async () => {
+    sfx.open();
+    setStudioOpen(true);
+    setStudioStep('canvas');
+    setStudioHtml('');
+    setStudioMessages([]);
+    setStudioInput('');
+    setStudioTitle('');
+    setStudioNiche('');
+    setStudioPrompt('');
+    setStudioSaveOpen(false);
+    setStudioHistory([]);
+    setStudioPreviewId(null);
+    setStudioSaveName('');
+    setStudioSaveCategory(null);
+    setStudioSaveNewCat('');
+    setStudioSaveNewCatColor('#2563EB');
+    setStudioShowNewCat(false);
+    try {
+      const hist = await listSiteHistory();
+      setStudioHistory(hist);
+    } catch { /* ignore */ }
+  };
+
+  const closeStudio = () => {
+    sfx.close();
+    setStudioOpen(false);
+  };
+
+  const syncStudioIframe = useCallback((): string => {
+    const doc = studioIframeRef.current?.contentDocument;
+    if (!doc || !doc.documentElement) return studioHtml;
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+  }, [studioHtml]);
+
+  const onStudioIframeLoad = useCallback(() => {
+    const doc = studioIframeRef.current?.contentDocument;
+    if (!doc) return;
+    doc.addEventListener('input', () => setStudioHtml(syncStudioIframe()));
+  }, [syncStudioIframe]);
+
+  const sendStudioPrompt = async () => {
+    const instruction = studioInput.trim();
+    if (!instruction || studioStreaming) return;
+    if (!aiEnabled) {
+      sfx.error();
+      flashToast({ type: 'error', text: 'AI editor needs an Anthropic key on the server.' });
+      return;
+    }
+    sfx.magic();
+    const history = studioMessages.slice(-6);
+    setStudioMessages((m) => [...m, { role: 'user', content: instruction }]);
+    setStudioInput('');
+    setStudioStreaming(true);
+    setStudioStep('generating');
+
+    try {
+      const result = await streamAiEdit(
+        { html: studioHtml || '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;padding:40px;background:#f8f8f8}</style></head><body><h1 style="text-align:center;color:#333">Your site will appear here</h1></body></html>', instruction, history },
+        (fullSoFar) => {
+          setStudioHtml(fullSoFar);
+          const now = Date.now();
+          if (now - studioLastPreviewPush.current > 400) {
+            studioLastPreviewPush.current = now;
+          }
+        },
+      );
+      setStudioHtml(result);
+      setStudioStep('editing');
+      setStudioMessages((m) => {
+        const next = [...m];
+        next[next.length - 1] = { role: 'assistant', content: 'Done! Preview updated. Keep editing, or click "Save as Template" when you\'re happy.' };
+        return next;
+      });
+      sfx.aiDone();
+      // Auto-save to history
+      try {
+        const entry = await createSiteHistory({
+          title: studioTitle || instruction.slice(0, 40),
+          niche: studioNiche,
+          html: result,
+          snapshotLabel: instruction.slice(0, 60),
+        });
+        setStudioHistory((prev) => [entry as any, ...prev]);
+        setStudioPreviewId(entry.id);
+      } catch { /* ignore */ }
+    } catch (err: any) {
+      sfx.error();
+      setStudioMessages((m) => {
+        const next = [...m];
+        next[next.length - 1] = { role: 'assistant', content: `Error: ${err?.message || 'Generation failed.'}` };
+        return next;
+      });
+      setStudioStep('editing');
+    } finally {
+      setStudioStreaming(false);
+    }
+  };
+
+  const loadHistoryEntry = async (entry: SiteHistoryEntry) => {
+    sfx.open();
+    setStudioHtml(entry.html);
+    setStudioTitle(entry.title);
+    setStudioNiche(entry.niche);
+    setStudioPreviewId(entry.id);
+    setStudioStep('editing');
+    setStudioMessages([{ role: 'assistant', content: `Loaded "${entry.snapshotLabel || entry.title}". Keep editing below.` }]);
+  };
+
+  const openSaveDialog = async () => {
+    sfx.tap();
+    setStudioSaveOpen(true);
+    setStudioSaveName(studioTitle || 'My Custom Template');
+    setStudioSaveCategory(null);
+    setStudioSaveNewCat('');
+    setStudioSaveNewCatColor('#2563EB');
+    setStudioShowNewCat(false);
+    try {
+      const { listTemplateCategories } = await import('../lib/pipelineClient');
+      const cats = await listTemplateCategories();
+      setStudioCategories(cats.map((c) => ({ id: c.id, name: c.name, color: c.color })));
+    } catch {
+      setStudioCategories([]);
+    }
+  };
+
+  const handleSaveAsTemplate = async () => {
+    if (!studioSaveName.trim()) {
+      sfx.error();
+      flashToast({ type: 'error', text: 'Please enter a template name.' });
+      return;
+    }
+    sfx.primary();
+    setStudioSaving(true);
+    try {
+      const { listTemplateCategories } = await import('../lib/pipelineClient');
+      let catId = studioSaveCategory;
+      if (studioShowNewCat && studioSaveNewCat.trim()) {
+        const { createTemplateCategory } = await import('../lib/pipelineClient');
+        const cat = await createTemplateCategory({ name: studioSaveNewCat.trim(), color: studioSaveNewCatColor });
+        catId = cat.id;
+        setStudioCategories((prev) => [...prev, { id: cat.id, name: cat.name, color: cat.color }]);
+      }
+      const currentHtml = syncStudioIframe();
+      const { createSiteHistory: csHist } = await import('../lib/pipelineClient');
+      const histEntry = await csHist({ title: studioSaveName.trim(), niche: studioNiche, html: currentHtml });
+      const { convertHistoryToTemplate: conv } = await import('../lib/pipelineClient');
+      const result = await conv({ historyId: histEntry.id, name: studioSaveName.trim(), categoryId: catId, niche: studioNiche });
+      sfx.deployed();
+      flashToast({ type: 'success', text: `"${result.name}" saved as a template!` });
+      setStudioSaveOpen(false);
+      closeStudio();
+    } catch (err: any) {
+      sfx.error();
+      flashToast({ type: 'error', text: err?.message || 'Failed to save template.' });
+    } finally {
+      setStudioSaving(false);
+    }
+  };
+
+  // --------------------------------------------------------------------------
+  // STUDIO VIEW — full-screen AI Site Builder overlay
+  // --------------------------------------------------------------------------
+  if (studioOpen) {
+    const samplePrompts = [
+      'Modern dental clinic with warm amber tones, hero with booking CTA, services grid, patient testimonials',
+      'Bold HVAC company with navy and orange, 24/7 emergency banner, service checklist, service area map',
+      'Luxury barber shop with dark wood tones, vintage aesthetic, services with prices, about section',
+    ];
+
+    return (
+      <div className="fixed inset-0 z-[60] bg-[#f4f2ee] flex flex-col animate-editor-rise">
+        {/* Studio header */}
+        <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-border-main shrink-0">
+          <button
+            onClick={closeStudio}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-border-main text-ink-secondary hover:text-ink text-sm font-medium font-sans active:scale-[0.98] transition-all"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </button>
+
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-accent-soft flex items-center justify-center">
+              <FlaskConical className="w-4 h-4 text-accent" />
+            </div>
+            <div>
+              <span className="text-sm font-bold font-sans text-ink leading-none">AI Site Studio</span>
+              {studioTitle && <span className="text-[11px] text-ink-secondary font-sans ml-2">— {studioTitle}</span>}
+            </div>
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            {/* Step badge */}
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold font-sans ${
+              studioStep === 'canvas' ? 'bg-amber-100 text-amber-700' :
+              studioStep === 'generating' ? 'bg-blue-100 text-blue-700' :
+              'bg-success-soft text-success'
+            }`}>
+              {studioStep === 'generating' && <Loader2 className="w-3 h-3 animate-spin" />}
+              {studioStep === 'canvas' && 'Step 1: Describe'}
+              {studioStep === 'generating' && 'Building your site…'}
+              {studioStep === 'editing' && 'Step 2: Edit & Save'}
+            </span>
+
+            {studioStep === 'editing' && (
+              <button
+                onClick={openSaveDialog}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all"
+              >
+                <BookmarkPlus className="w-4 h-4" /> Save as Template
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Studio workspace: left sidebar + right preview */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left panel: history + chat */}
+          <div className="w-80 shrink-0 bg-white border-r border-border-main flex flex-col overflow-hidden">
+
+            {/* Niche + title inputs */}
+            <div className="p-3 border-b border-border-light space-y-2">
+              <div className="flex gap-2">
+                <input
+                  value={studioTitle}
+                  onChange={(e) => setStudioTitle(e.target.value)}
+                  placeholder="Site title (e.g. Vintage Cuts Barber)"
+                  className="flex-1 px-2.5 py-1.5 rounded-lg border border-border-main bg-white text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all"
+                />
+                <input
+                  value={studioNiche}
+                  onChange={(e) => setStudioNiche(e.target.value)}
+                  placeholder="Niche"
+                  className="w-24 px-2.5 py-1.5 rounded-lg border border-border-main bg-white text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all"
+                />
+              </div>
+            </div>
+
+            {/* Prompt input */}
+            <div className="p-3 border-b border-border-light">
+              <p className="text-[10px] font-bold font-sans text-ink-secondary uppercase tracking-widest mb-2">
+                {studioStep === 'canvas' ? 'Describe your website' : 'Add more instructions'}
+              </p>
+              <div className="flex gap-2">
+                <textarea
+                  value={studioInput}
+                  onChange={(e) => setStudioInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendStudioPrompt(); }
+                  }}
+                  placeholder="e.g. Make it a modern dental clinic with amber tones and booking CTA…"
+                  disabled={studioStreaming}
+                  rows={3}
+                  className="flex-1 resize-none rounded-xl border border-border-main bg-off-white px-3 py-2 text-sm font-sans text-ink placeholder:text-ink-secondary/70 focus:outline-none focus:border-accent focus:bg-white transition-all disabled:opacity-60"
+                />
+              </div>
+              {studioStep === 'canvas' && (
+                <div className="mt-2 space-y-1">
+                  {samplePrompts.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => { sfx.tap(); setStudioInput(p); }}
+                      className="w-full text-left text-[11px] font-sans text-ink-secondary bg-off-white hover:bg-accent-soft hover:text-accent rounded-lg px-3 py-1.5 transition-all line-clamp-1"
+                    >
+                      "{p.slice(0, 60)}…"
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={sendStudioPrompt}
+                disabled={studioStreaming || !studioInput.trim() || !aiEnabled}
+                className="mt-2 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {studioStreaming ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Building…</>
+                ) : (
+                  <><Sparkles className="w-4 h-4" /> {studioStep === 'canvas' ? 'Build My Website' : 'Regenerate Section'}</>
+                )}
+              </button>
+              {!aiEnabled && (
+                <p className="mt-1 text-[10px] text-amber-600 font-sans text-center">
+                  AI needs a server Anthropic key — or paste your own key in Create Template.
+                </p>
+              )}
+            </div>
+
+            {/* Chat messages */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {studioMessages.map((m, i) => (
+                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[90%] rounded-2xl px-3 py-2 text-xs font-sans leading-relaxed ${
+                    m.role === 'user'
+                      ? 'bg-accent text-white rounded-br-sm'
+                      : 'bg-off-white text-ink border border-border-light rounded-bl-sm'
+                  }`}>
+                    {m.content || <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Working…</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Right panel: preview */}
+          <div className="flex-1 bg-[#f4f2ee] flex flex-col overflow-hidden">
+            {/* Canvas state */}
+            {studioStep === 'canvas' && !studioHtml && (
+              <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
+                <div className="relative mb-6">
+                  <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-accent/20 to-violet-500/20 flex items-center justify-center">
+                    <FlaskConical className="w-10 h-10 text-accent" />
+                  </div>
+                  <div className="absolute -top-2 -right-2 w-8 h-8 rounded-full bg-accent text-white flex items-center justify-center text-lg animate-bounce">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                </div>
+                <h2 className="text-2xl font-bold font-sans text-ink mb-2">Describe your website</h2>
+                <p className="text-sm text-ink-secondary font-sans max-w-md mb-6 leading-relaxed">
+                  Tell AI what kind of site you want — niche, style, colors, sections. It generates the full HTML and you edit it live.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-lg w-full">
+                  {[
+                    { icon: '🦷', label: 'Dental Clinic', desc: 'Modern, warm amber tones' },
+                    { icon: '💈', label: 'Barber Shop', desc: 'Vintage, dark wood aesthetic' },
+                    { icon: '❄️', label: 'HVAC Service', desc: 'Bold navy & orange' },
+                  ].map((item) => (
+                    <button
+                      key={item.label}
+                      onClick={() => {
+                        sfx.tap();
+                        setStudioNiche(item.label);
+                        setStudioInput(`A ${item.label.toLowerCase()} website — ${item.desc}, hero with CTA, services grid, testimonials, contact section`);
+                      }}
+                      className="flex flex-col items-center gap-2 p-4 rounded-xl bg-white border border-border-main hover:border-accent/50 hover:shadow-md transition-all text-center"
+                    >
+                      <span className="text-3xl">{item.icon}</span>
+                      <span className="text-xs font-bold font-sans text-ink">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Live preview */}
+            {(studioStep === 'generating' || studioStep === 'editing') && (
+              <>
+                {studioStep === 'generating' && (
+                  <div className="h-10 flex items-center justify-center gap-2 bg-blue-50 border-b border-blue-100 text-xs font-sans text-blue-700">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    AI is generating your website in real-time…
+                  </div>
+                )}
+                <div className="flex-1 overflow-auto bg-white flex justify-center p-4">
+                  <div className="w-full max-w-[1100px] bg-white rounded-xl border border-border-main shadow-md overflow-hidden" style={{ minHeight: '70vh' }}>
+                    <iframe
+                      ref={studioIframeRef}
+                      srcDoc={studioHtml}
+                      onLoad={onStudioIframeLoad}
+                      title="Studio preview"
+                      className="w-full h-full border-0 block"
+                      style={{ minHeight: '70vh' }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Save as Template dialog */}
+        {studioSaveOpen && (
+          <div
+            className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-ink/50 backdrop-blur-sm animate-editor-fade"
+            onClick={(e) => { if (e.target === e.currentTarget) { sfx.close(); setStudioSaveOpen(false); } }}
+          >
+            <div
+              className="w-full max-w-md bg-white rounded-2xl border border-border-main shadow-[0_24px_70px_rgba(26,25,22,0.3)] p-6 animate-editor-rise"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-accent-soft flex items-center justify-center">
+                    <BookmarkPlus className="w-5 h-5 text-accent" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold font-sans text-ink">Save as Template</h2>
+                    <p className="text-[11px] text-ink-secondary font-sans">Turn your AI site into a reusable template</p>
+                  </div>
+                </div>
+                <button onClick={() => { sfx.close(); setStudioSaveOpen(false); }} className="w-8 h-8 rounded-lg flex items-center justify-center text-ink-secondary hover:text-ink hover:bg-off-white transition-all">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Template name */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Template Name</label>
+                <input
+                  value={studioSaveName}
+                  onChange={(e) => setStudioSaveName(e.target.value)}
+                  placeholder="e.g. Modern Dental Clinic"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-border-main bg-white text-sm font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent transition-all"
+                  autoFocus
+                />
+              </div>
+
+              {/* Category */}
+              <div className="mb-4">
+                <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Category</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => { sfx.toggle(); setStudioSaveCategory(null); setStudioShowNewCat(false); }}
+                    className={`shrink-0 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all active:scale-[0.96] ${
+                      studioSaveCategory === null && !studioShowNewCat ? 'bg-ink text-white border-ink' : 'bg-white text-ink-secondary border-border-main hover:text-ink'
+                    }`}
+                  >
+                    Uncategorized
+                  </button>
+                  {studioCategories.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => { sfx.toggle(); setStudioSaveCategory(c.id); setStudioShowNewCat(false); }}
+                      className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold font-sans border transition-all active:scale-[0.96] ${
+                        studioSaveCategory === c.id ? 'border-current' : 'bg-white border-border-main'
+                      }`}
+                      style={studioSaveCategory === c.id ? { color: c.color, backgroundColor: `${c.color}15`, borderColor: c.color } : {}}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
+                      {c.name}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => { sfx.tap(); setStudioShowNewCat(!studioShowNewCat); setStudioSaveCategory(null); }}
+                    className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-semibold font-sans border border-dashed border-border-main text-ink-secondary hover:text-accent hover:border-accent/40 transition-all"
+                  >
+                    <span className="text-sm">+</span> New
+                  </button>
+                </div>
+                {studioShowNewCat && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {['#2563EB', '#7C3AED', '#DB2777', '#DC2626', '#D97706', '#16A34A', '#0891B2', '#4F46E5'].map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => { sfx.tap(); setStudioSaveNewCatColor(c); }}
+                          className={`w-6 h-6 rounded-full border-2 transition-all ${studioSaveNewCatColor === c ? 'border-ink scale-110' : 'border-transparent'}`}
+                          style={{ backgroundColor: c }}
+                        />
+                      ))}
+                    </div>
+                    <input
+                      value={studioSaveNewCat}
+                      onChange={(e) => setStudioSaveNewCat(e.target.value)}
+                      placeholder="Category name…"
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-border-main bg-white text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent"
+                      autoFocus
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { sfx.close(); setStudioSaveOpen(false); }}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-border-main text-ink text-sm font-semibold font-sans hover:bg-off-white active:scale-[0.98] transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveAsTemplate}
+                  disabled={studioSaving || !studioSaveName.trim()}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {studioSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  {studioSaving ? 'Saving…' : 'Save Template'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ===========================================================================
   // LIST VIEW
   // ===========================================================================
   if (view === 'list') {
@@ -487,6 +1004,10 @@ export const Editor: React.FC<EditorProps> = ({ active }) => {
           onCreateNew={() => {
             sfx.primary();
             setCreateOpen(true);
+          }}
+          onOpenStudio={() => {
+            sfx.primary();
+            openStudio();
           }}
         />
 
@@ -1179,7 +1700,8 @@ const TemplateLabBanner: React.FC<{
   aiEnabled: boolean;
   onBrowseTemplates: () => void;
   onCreateNew: () => void;
-}> = ({ aiEnabled, onBrowseTemplates, onCreateNew }) => (
+  onOpenStudio: () => void;
+}> = ({ aiEnabled, onBrowseTemplates, onCreateNew, onOpenStudio }) => (
   <div className="relative mb-8 rounded-2xl overflow-hidden bg-gradient-to-br from-[#1A1916] via-[#252320] to-[#1A1916] border border-white/10 animate-sparkle-in">
     {/* Ambient glow */}
     <div className="pointer-events-none absolute -top-20 -right-20 w-72 h-72 bg-accent/15 rounded-full blur-3xl" />
@@ -1218,11 +1740,18 @@ const TemplateLabBanner: React.FC<{
           Browse Templates
         </button>
         <button
-          onClick={onCreateNew}
+          onClick={onOpenStudio}
           className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold font-sans shadow-sm hover:bg-accent/90 active:scale-[0.98] transition-all"
         >
+          <FlaskConical className="w-4 h-4" />
+          AI Studio
+        </button>
+        <button
+          onClick={onCreateNew}
+          className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white/10 border border-white/20 text-white text-sm font-semibold font-sans hover:bg-white/20 active:scale-[0.98] transition-all"
+        >
           <Wand2 className="w-4 h-4" />
-          Create New
+          Create Template
         </button>
       </div>
     </div>
