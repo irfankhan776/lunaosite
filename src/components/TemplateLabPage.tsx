@@ -139,8 +139,6 @@ export const TemplateLabPage: React.FC<{
   const [html, setHtml] = useState('');
   // previewHtml = compiled HTML with demo values — shown in the iframe
   const [previewHtml, setPreviewHtml] = useState('');
-  // Key to force iframe refresh
-  const [previewKey, setPreviewKey] = useState(0);
   // thinkingAcc = live thinking output from the AI
   const [thinkingAcc, setThinkingAcc] = useState('');
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -150,13 +148,15 @@ export const TemplateLabPage: React.FC<{
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [title, setTitle] = useState('');
+  // Show/hide the prompt input area (collapsed after first prompt submitted)
+  const [showPromptInput, setShowPromptInput] = useState(true);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
   const [niche, setNiche] = useState('');
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [labError, setLabError] = useState<string | null>(null);
-  const [showVibePrompt, setShowVibePrompt] = useState(false);
-  const [vibeCopied, setVibeCopied] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [saveCategory, setSaveCategory] = useState<string | null>(null);
@@ -168,9 +168,16 @@ export const TemplateLabPage: React.FC<{
   const [loadingHistory, setLoadingHistory] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const lastPush = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // CRITICAL: Push previewHtml to iframe ref the MOMENT it changes.
+  // This bypasses React re-render timing — iframe always shows the latest.
+  useEffect(() => {
+    if (iframeRef.current && previewHtml) {
+      iframeRef.current.srcdoc = previewHtml;
+    }
+  }, [previewHtml]);
 
   // Scroll chat to bottom on new messages
   useEffect(() => {
@@ -194,17 +201,26 @@ export const TemplateLabPage: React.FC<{
   };
 
   // -------------------------------------------------------------------------
-  // Preview refresh — force iframe to reload from current previewHtml
+  // Preview refresh
   // -------------------------------------------------------------------------
   const refreshPreview = () => {
     sfx.tap();
-    if (previewHtml) {
-      setPreviewKey(k => k + 1);
-      // Force iframe refresh by resetting srcDoc
-      if (iframeRef.current) {
-        iframeRef.current.srcdoc = previewHtml;
-      }
+    if (previewHtml && iframeRef.current) {
+      iframeRef.current.srcdoc = previewHtml;
     }
+  };
+
+  // -------------------------------------------------------------------------
+  // Title editing helpers
+  // -------------------------------------------------------------------------
+  const startEditTitle = () => {
+    setTitleDraft(title);
+    setEditingTitle(true);
+  };
+
+  const commitTitle = () => {
+    setTitle(titleDraft.trim() || title);
+    setEditingTitle(false);
   };
 
   // -------------------------------------------------------------------------
@@ -234,6 +250,7 @@ export const TemplateLabPage: React.FC<{
       try {
         sfx.magic();
         setMode('active');
+        setShowPromptInput(false);
         const { rawHtml: processed, previewHtml: preview } = await processUploadedHtml({
           html: rawHtml,
           niche: niche || 'Local Business',
@@ -241,8 +258,7 @@ export const TemplateLabPage: React.FC<{
         });
         const compiled = compilePreview(processed);
         setHtml(processed);
-        setPreviewHtml(compiled);
-        setPreviewKey(k => k + 1);
+        setPreviewHtml(compiled); // useEffect pushes to iframe instantly
         setTitle(niche || 'Uploaded Template');
         setMessages([{ role: 'assistant', content: 'File processed! Preview is ready on the right. Describe any changes you want below.' }]);
         sfx.aiDone();
@@ -282,22 +298,15 @@ export const TemplateLabPage: React.FC<{
     setMode('active');
     setLabError(null);
     setThinkingAcc('');
+    // Hide the prompt area — chat now dominates
+    setShowPromptInput(false);
 
     try {
       const base = html || BLANK_CANVAS;
       const result = await streamAiEdit(
         { html: base, instruction, history: history_msgs, anthropicApiKey: apiKey.trim() || undefined },
-        (fullSoFar) => {
-          setHtml(fullSoFar);
-          const compiled = compilePreview(fullSoFar);
-          const now = Date.now();
-          if (now - lastPush.current > 600) {
-            lastPush.current = now;
-            // Push to iframe immediately
-            if (iframeRef.current) {
-              iframeRef.current.srcdoc = compiled;
-            }
-          }
+        (_fullSoFar) => {
+          // preview updates via the useEffect watching previewHtml
         },
         (thinkingText) => {
           setThinkingAcc(prev => prev + thinkingText);
@@ -306,12 +315,8 @@ export const TemplateLabPage: React.FC<{
 
       const finalCompiled = compilePreview(result);
       setHtml(result);
-      setPreviewHtml(finalCompiled);
+      setPreviewHtml(finalCompiled); // triggers the useEffect → iframe gets updated instantly
       setThinkingAcc('');
-      // Force iframe reload with fresh compiled content
-      if (iframeRef.current) {
-        iframeRef.current.srcdoc = finalCompiled;
-      }
 
       const summary = summarizeHtml(result);
       setMessages(m => {
@@ -352,12 +357,12 @@ export const TemplateLabPage: React.FC<{
     sfx.open();
     const compiled = compilePreview(entry.html);
     setHtml(entry.html);
-    setPreviewHtml(compiled);
+    setPreviewHtml(compiled); // useEffect will push to iframe
     setTitle(entry.title);
     setNiche(entry.niche);
     setMode('active');
     setMessages([{ role: 'assistant', content: 'Loaded "' + (entry.snapshotLabel || entry.title) + '". Preview on the right. Keep editing below.' }]);
-    if (iframeRef.current) iframeRef.current.srcdoc = compiled;
+    setShowPromptInput(false); // collapse input after loading
   };
 
   // -------------------------------------------------------------------------
@@ -477,131 +482,155 @@ export const TemplateLabPage: React.FC<{
       <div className="flex flex-1 overflow-hidden">
 
         {/* ----------------------------------------------------
-            LEFT SIDEBAR (only shown in active mode)
+            LEFT SIDEBAR — always visible, adapts to context
         ---------------------------------------------------- */}
-        <div
-          className={`shrink-0 flex flex-col overflow-hidden bg-white border-r border-border-main transition-all duration-300 ease-in-out ${
-            isActive ? 'w-[320px]' : 'w-0'
-          }`}
-        >
-          {isActive && (
-            <>
-              {/* ---- API Key ---- */}
-              <div className="px-4 pt-4 pb-3 border-b border-border-light">
-                <button
-                  onClick={() => { sfx.toggle(); setShowApiKey(!showApiKey); }}
-                  className="w-full flex items-center gap-2 text-[12px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
-                >
-                  <div className="w-7 h-7 rounded-lg bg-accent-soft flex items-center justify-center shrink-0">
-                    <Key className="w-3.5 h-3.5 text-accent" />
-                  </div>
-                  <span className="flex-1 text-left text-xs">Anthropic Key</span>
-                  <div className={`w-2 h-2 rounded-full shrink-0 ${apiKey.trim() ? 'bg-success' : 'bg-ink-tertiary'}`} />
-                  <ChevronDown className={`w-3.5 h-3.5 text-ink-tertiary transition-transform ${showApiKey ? 'rotate-180' : ''}`} />
-                </button>
+        <div className="w-[320px] shrink-0 flex flex-col overflow-hidden bg-white border-r border-border-main">
 
-                {showApiKey && (
-                  <div className="mt-3 space-y-2">
-                    <div className="relative">
-                      <input
-                        type="password"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="sk-ant-api03\u2026"
-                        className="w-full pr-20 pl-3 py-2 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                      />
-                      <a
-                        href="https://console.anthropic.com/settings/keys"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-accent hover:text-accent-hover font-semibold"
-                      >
-                        Get key
-                      </a>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-[10px] font-sans text-ink-tertiary">
-                        {apiKey.trim() ? 'Key saved \u2014 used for generation' : 'Paste key + click Set'}
-                      </p>
-                      <button
-                        onClick={() => {
-                          if (apiKey.trim()) {
-                            localStorage.setItem('lunao_user_anthropic_key', apiKey.trim());
-                            sfx.saved();
-                          }
-                        }}
-                        disabled={!apiKey.trim()}
-                        className="inline-flex items-center px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold font-sans hover:bg-accent-hover active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        Set
-                      </button>
-                    </div>
-                  </div>
-                )}
+          {/* ---- API Key ---- */}
+          <div className="px-4 pt-4 pb-3 border-b border-border-light">
+            <button
+              onClick={() => { sfx.toggle(); setShowApiKey(!showApiKey); }}
+              className="w-full flex items-center gap-2 text-[12px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
+            >
+              <div className="w-7 h-7 rounded-lg bg-accent-soft flex items-center justify-center shrink-0">
+                <Key className="w-3.5 h-3.5 text-accent" />
               </div>
+              <span className="flex-1 text-left text-xs">Anthropic Key</span>
+              <div className={`w-2 h-2 rounded-full shrink-0 ${apiKey.trim() ? 'bg-success' : 'bg-ink-tertiary'}`} />
+              <ChevronDown className={`w-3.5 h-3.5 text-ink-tertiary transition-transform ${showApiKey ? 'rotate-180' : ''}`} />
+            </button>
 
-              {/* ---- Chat messages ---- */}
-              <div className="flex-1 overflow-y-auto px-4 pt-3 pb-2 space-y-2 min-h-0">
-                {messages.map((m, i) => (
-                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[93%] rounded-2xl px-3 py-2.5 text-[12px] font-sans leading-relaxed ${
-                      m.role === 'user'
-                        ? 'bg-accent text-white rounded-br-sm'
-                        : 'bg-off-white border border-border-light text-ink rounded-bl-sm'
-                    }`}>
-                      {m.content || (
-                        <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Working\u2026</span>
-                      )}
-                    </div>
+            {showApiKey && (
+              <div className="mt-3 space-y-2">
+                <div className="relative">
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="sk-ant-api03\u2026"
+                    className="w-full pr-20 pl-3 py-2 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                  />
+                  <a
+                    href="https://console.anthropic.com/settings/keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-accent hover:text-accent-hover font-semibold"
+                  >
+                    Get key
+                  </a>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-sans text-ink-tertiary">
+                    {apiKey.trim() ? 'Key saved \u2014 used for generation' : 'Paste key + click Set'}
+                  </p>
+                  <button
+                    onClick={() => {
+                      if (apiKey.trim()) {
+                        localStorage.setItem('lunao_user_anthropic_key', apiKey.trim());
+                        sfx.saved();
+                      }
+                    }}
+                    disabled={!apiKey.trim()}
+                    className="inline-flex items-center px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold font-sans hover:bg-accent-hover active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Set
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ---- Chat messages — always visible ---- */}
+          <div className="flex-1 overflow-y-auto px-4 pt-3 pb-2 space-y-2 min-h-0">
+            {messages.length === 0 && !streaming && (
+              <div className="text-center py-3">
+                <p className="text-[11px] text-ink-tertiary font-sans italic">
+                  Describe a change and AI updates the preview instantly\u2026
+                </p>
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[93%] rounded-2xl px-3 py-2.5 text-[12px] font-sans leading-relaxed ${
+                  m.role === 'user'
+                    ? 'bg-accent text-white rounded-br-sm'
+                    : 'bg-off-white border border-border-light text-ink rounded-bl-sm'
+                }`}>
+                  {m.content || (
+                    <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Working\u2026</span>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* AI thinking bubble */}
+            {streaming && (
+              <div className="flex justify-start">
+                <div className="max-w-[93%] rounded-2xl px-3 py-2.5 bg-off-white border border-border-light rounded-bl-sm">
+                  <div className="flex items-center gap-1 mb-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                    <span className="text-[10px] text-accent font-semibold font-sans">Thinking</span>
                   </div>
+                  {thinkingAcc ? (
+                    <p className="text-[11px] text-ink-secondary font-sans leading-relaxed italic">
+                      {thinkingAcc.slice(-200)}
+                    </p>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-ink-tertiary font-sans animate-pulse">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Preparing…
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* ---- Recent builds (compact) ---- */}
+          {history.length > 0 && (
+            <div className="px-4 py-2 border-t border-border-light">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Recent</span>
+              </div>
+              <div className="space-y-0.5 max-h-16 overflow-y-auto">
+                {history.slice(0, 3).map(entry => (
+                  <button
+                    key={entry.id}
+                    onClick={() => loadEntry(entry)}
+                    className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-accent-soft transition-colors group"
+                  >
+                    <p className="text-[11px] font-semibold font-sans text-ink group-hover:text-accent truncate">
+                      {entry.title || entry.snapshotLabel || 'Build'}
+                    </p>
+                  </button>
                 ))}
-
-                {/* AI thinking bubble */}
-                {streaming && (
-                  <div className="flex justify-start">
-                    <div className="max-w-[93%] rounded-2xl px-3 py-2.5 bg-off-white border border-border-light rounded-bl-sm">
-                      <div className="flex items-center gap-1 mb-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                        <span className="text-[10px] text-accent font-semibold font-sans">Thinking</span>
-                      </div>
-                      {thinkingAcc ? (
-                        <p className="text-[11px] text-ink-secondary font-sans leading-relaxed italic">
-                          {thinkingAcc.slice(-200)}
-                        </p>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-ink-tertiary font-sans animate-pulse">
-                          <Loader2 className="w-3 h-3 animate-spin" /> Preparing…
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
               </div>
+            </div>
+          )}
 
-              {/* ---- Recent builds ---- */}
-              <div className="px-4 py-2 border-t border-border-light">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Recent</span>
-                </div>
-                <div className="space-y-0.5 max-h-20 overflow-y-auto">
-                  {history.slice(0, 4).map(entry => (
-                    <button
-                      key={entry.id}
-                      onClick={() => loadEntry(entry)}
-                      className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-accent-soft transition-colors group"
-                    >
-                      <p className="text-[11px] font-semibold font-sans text-ink group-hover:text-accent truncate">
-                        {entry.title || entry.snapshotLabel || 'Build'}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              </div>
+          {/* ---- Prompt input — collapses after submit ---- */}
+          <div className="border-t border-border-light shrink-0">
+            {/* Show-input button when collapsed */}
+            {!showPromptInput && !streaming && (
+              <button
+                onClick={() => { sfx.tap(); setShowPromptInput(true); }}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-semibold font-sans text-accent hover:bg-accent-soft transition-all"
+              >
+                <Wand2 className="w-3.5 h-3.5" />
+                Continue editing\u2026
+              </button>
+            )}
 
-              {/* ---- Input ---- */}
-              <div className="px-4 pb-4 pt-2 space-y-2 border-t border-border-light shrink-0">
+            {/* Prompt area — smooth collapse animation */}
+            <div
+              className="overflow-hidden transition-all duration-300 ease-in-out"
+              style={{
+                maxHeight: showPromptInput ? '500px' : '0px',
+                opacity: showPromptInput ? 1 : 0,
+              }}
+            >
+              <div className="px-4 pb-4 pt-2 space-y-2">
                 {labError && (
                   <div className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-600 text-[10px] font-sans flex items-start gap-1.5">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -621,6 +650,7 @@ export const TemplateLabPage: React.FC<{
                   disabled={streaming}
                   rows={2}
                   className="w-full resize-none rounded-xl border border-border-main bg-off-white px-3 py-2 text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50 scrollbar-none"
+                  autoFocus
                 />
                 <button
                   onClick={sendPrompt}
@@ -634,8 +664,8 @@ export const TemplateLabPage: React.FC<{
                   )}
                 </button>
               </div>
-            </>
-          )}
+            </div>
+          </div>
         </div>
 
         {/* ----------------------------------------------------
@@ -689,6 +719,7 @@ export const TemplateLabPage: React.FC<{
                         onClick={() => {
                           sfx.tap();
                           setNiche(item.label);
+                          setTitle(item.label);
                           setInput(item.prompt);
                           setMode('active');
                           setMessages([{ role: 'user', content: item.prompt }]);
@@ -697,18 +728,13 @@ export const TemplateLabPage: React.FC<{
                           setLabError(null);
                           streamAiEdit(
                             { html: BLANK_CANVAS, instruction: item.prompt, anthropicApiKey: apiKey.trim() || undefined },
-                            (fullSoFar) => {
-                              setHtml(fullSoFar);
-                              const compiled = compilePreview(fullSoFar);
-                              if (iframeRef.current) iframeRef.current.srcdoc = compiled;
-                            },
+                            (_fullSoFar) => {},
                             (thinkingText) => setThinkingAcc(prev => prev + thinkingText),
                           ).then(result => {
                             const finalCompiled = compilePreview(result);
                             setHtml(result);
-                            setPreviewHtml(finalCompiled);
+                            setPreviewHtml(finalCompiled); // triggers useEffect → iframe updated
                             setThinkingAcc('');
-                            if (iframeRef.current) iframeRef.current.srcdoc = finalCompiled;
                             setMessages(m => {
                               const next = [...m];
                               next[next.length - 1] = { role: 'assistant', content: summarizeHtml(result) || 'Done! Preview ready.' };
@@ -783,11 +809,30 @@ export const TemplateLabPage: React.FC<{
                   </button>
                 </div>
 
-                {/* Site title */}
-                <div className="flex items-center gap-1.5 text-xs font-semibold font-sans text-ink-secondary">
-                  <FlaskConical className="w-3.5 h-3.5" />
-                  <span className="max-w-[200px] truncate">{title || 'Site preview'}</span>
-                </div>
+                {/* Site title — click to edit */}
+                {editingTitle ? (
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    onChange={e => setTitleDraft(e.target.value)}
+                    onBlur={commitTitle}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') commitTitle();
+                      if (e.key === 'Escape') { setEditingTitle(false); }
+                    }}
+                    className="flex-1 max-w-[200px] px-2 py-1 rounded-lg border border-accent bg-white text-xs font-semibold font-sans text-ink focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    onClick={startEditTitle}
+                    title="Click to rename"
+                    className="flex items-center gap-1.5 text-xs font-semibold font-sans text-ink-secondary hover:text-ink px-2 py-1 rounded-lg hover:bg-off-white transition-all"
+                  >
+                    <FlaskConical className="w-3.5 h-3.5" />
+                    <span className="max-w-[200px] truncate">{title || 'Untitled site'}</span>
+                    <span className="text-ink-tertiary text-[10px] opacity-0 group-hover:opacity-100">✎</span>
+                  </button>
+                )}
 
                 {/* Build indicator */}
                 {streaming && (
@@ -839,7 +884,6 @@ export const TemplateLabPage: React.FC<{
               {/* Preview iframe */}
               <div className="flex-1 overflow-auto flex justify-center items-start p-5 bg-off-white">
                 <div
-                  key={previewKey}
                   className={`w-full bg-white rounded-2xl border border-border-main shadow-lg overflow-hidden ${
                     device === 'mobile' ? 'max-w-[400px]' : 'max-w-[1100px]'
                   }`}
