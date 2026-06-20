@@ -3,6 +3,7 @@ import {
   ArrowLeft, Key, ChevronDown, Loader2, Sparkles, AlertCircle,
   FlaskConical, Layout, Monitor, Smartphone, Upload, Copy,
   CheckSquare, RotateCcw, BookmarkPlus, X, Code2, Check, Plus,
+  RefreshCw, Wand2,
 } from 'lucide-react';
 import {
   AiChatMessage, SiteHistoryEntry,
@@ -68,6 +69,60 @@ const sfx = {
 };
 
 // ---------------------------------------------------------------------------
+// Helpers: compile preview HTML and summarize changes
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDER_MAP: Record<string, string> = {
+  BUSINESS_NAME: 'Radiant Smiles Dental',
+  BUSINESS_NAME_SHORT: 'Radiant',
+  CITY: 'Austin, TX',
+  STATE: 'TX',
+  PHONE_DISPLAY: '(512) 555-0199',
+  PHONE_RAW: '5125550199',
+  EMAIL: 'hello@example.com',
+  ADDRESS: '3801 Capital of Texas Hwy, Austin, TX',
+  GOOGLE_RATING: '4.9',
+  GOOGLE_REVIEW_COUNT: '342',
+  INSTAGRAM_HANDLE: 'radiant_smiles',
+  FACEBOOK_URL: 'https://facebook.com/radiantsmiles',
+  YEARS_IN_BUSINESS: '2012',
+  DOCTOR_NAME: 'Dr. Alex Rivera',
+  AVERAGE_RATING: '4.9',
+  MEMBERS_COUNT: '1,200',
+  TRAINERS_COUNT: '8',
+  SITE_URL: 'https://example.com',
+};
+
+function compilePreview(rawHtml: string): string {
+  if (!rawHtml || typeof rawHtml !== 'string') return rawHtml || '';
+  return rawHtml.replace(/\{\{(\w+)\}\}/g, (_, key) =>
+    key in PLACEHOLDER_MAP ? PLACEHOLDER_MAP[key] : `{{${key}}}`,
+  );
+}
+
+function summarizeHtml(rawHtml: string): string {
+  if (!rawHtml || typeof rawHtml !== 'string') return 'Done! Preview updated.';
+  const hasPlaceholders = rawHtml.includes('{{');
+  const titleMatch = rawHtml.match(/<title>([^<]{0,60})/i);
+  const parts: string[] = [];
+  if (hasPlaceholders) parts.push('Personalization ready');
+  if (titleMatch) parts.push(`Title: "${titleMatch[1].trim()}"`);
+  return parts.length > 0 ? parts.join(' \u00b7 ') : 'Done! Preview updated.';
+}
+
+/**
+ * Validate HTML — return null if it's not a valid HTML doc, otherwise return as-is.
+ */
+function validateHtml(html: string): string | null {
+  if (!html || typeof html !== 'string') return null;
+  const trimmed = html.trim();
+  if (!trimmed) return null;
+  // Must contain html tag
+  if (!/<html[\s>]/i.test(trimmed)) return null;
+  return trimmed;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -78,12 +133,15 @@ export const TemplateLabPage: React.FC<{
   flashToast: FlashToastFn;
 }> = ({ aiEnabled, onClose, onBrowseTemplates, flashToast }) => {
 
+  // Layout mode
   const [mode, setMode] = useState<'idle' | 'active'>('idle');
-  // html = raw HTML with {{PLACEHOLDERS}} — never shown directly in preview
+  // html = raw HTML with {{PLACEHOLDERS}}
   const [html, setHtml] = useState('');
   // previewHtml = compiled HTML with demo values — shown in the iframe
   const [previewHtml, setPreviewHtml] = useState('');
-  // thinkingAcc = live thinking output from the AI (shown as animated text)
+  // Key to force iframe refresh
+  const [previewKey, setPreviewKey] = useState(0);
+  // thinkingAcc = live thinking output from the AI
   const [thinkingAcc, setThinkingAcc] = useState('');
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -108,9 +166,16 @@ export const TemplateLabPage: React.FC<{
   const [saving, setSaving] = useState(false);
   const [categories, setCategories] = useState<{ id: string; name: string; color: string }[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastPush = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Scroll chat to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, thinkingAcc]);
 
   useEffect(() => {
     setLoadingHistory(true);
@@ -118,7 +183,6 @@ export const TemplateLabPage: React.FC<{
       .then(h => setHistory(h))
       .catch(() => setHistory([]))
       .finally(() => setLoadingHistory(false));
-    // Load saved API key from localStorage
     const savedKey = localStorage.getItem('lunao_user_anthropic_key');
     if (savedKey) setApiKey(savedKey);
   }, []);
@@ -129,52 +193,23 @@ export const TemplateLabPage: React.FC<{
     setTimeout(() => setLabError(null), 5000);
   };
 
-  // ---------------------------------------------------------------------------
-  // Helpers: compile preview HTML and summarize changes
-  // ---------------------------------------------------------------------------
-
-  const PLACEHOLDER_MAP: Record<string, string> = {
-    BUSINESS_NAME: 'Radiant Smiles Dental',
-    BUSINESS_NAME_SHORT: 'Radiant',
-    CITY: 'Austin, TX',
-    STATE: 'TX',
-    PHONE_DISPLAY: '(512) 555-0199',
-    PHONE_RAW: '5125550199',
-    EMAIL: 'hello@example.com',
-    ADDRESS: '3801 Capital of Texas Hwy, Austin, TX',
-    GOOGLE_RATING: '4.9',
-    GOOGLE_REVIEW_COUNT: '342',
-    INSTAGRAM_HANDLE: 'radiant_smiles',
-    FACEBOOK_URL: 'https://facebook.com/radiantsmiles',
-    YEARS_IN_BUSINESS: '2012',
-    DOCTOR_NAME: 'Dr. Alex Rivera',
-    AVERAGE_RATING: '4.9',
-    MEMBERS_COUNT: '1,200',
-    TRAINERS_COUNT: '8',
-    SITE_URL: 'https://example.com',
+  // -------------------------------------------------------------------------
+  // Preview refresh — force iframe to reload from current previewHtml
+  // -------------------------------------------------------------------------
+  const refreshPreview = () => {
+    sfx.tap();
+    if (previewHtml) {
+      setPreviewKey(k => k + 1);
+      // Force iframe refresh by resetting srcDoc
+      if (iframeRef.current) {
+        iframeRef.current.srcdoc = previewHtml;
+      }
+    }
   };
 
-  /** Replace all {{PLACEHOLDERS}} with demo values for the iframe preview. */
-  function compilePreview(rawHtml: string): string {
-    if (!rawHtml || typeof rawHtml !== 'string') return rawHtml;
-    return rawHtml.replace(/\{\{(\w+)\}\}/g, (_, key) =>
-      key in PLACEHOLDER_MAP ? PLACEHOLDER_MAP[key] : `{{${key}}}`,
-    );
-  }
-
-  /** Brief one-line summary of what the AI changed, for the chat message. */
-  function summarizeHtml(rawHtml: string): string {
-    if (!rawHtml || typeof rawHtml !== 'string') return 'Done! Preview updated.';
-    const hasPlaceholders = rawHtml.includes('{{');
-    const titleMatch = rawHtml.match(/<title>([^<]{0,60})/i);
-    const bodySnippet = rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
-    const parts: string[] = [];
-    if (hasPlaceholders) parts.push('Personalization ready');
-    if (titleMatch) parts.push(`Title: "${titleMatch[1].trim()}"`);
-    if (parts.length === 0 && bodySnippet) parts.push(bodySnippet + '\u2026');
-    return parts.length > 0 ? parts.join(' \u00b7 ') : 'Done! Preview updated.';
-  }
-
+  // -------------------------------------------------------------------------
+  // File upload
+  // -------------------------------------------------------------------------
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -204,12 +239,19 @@ export const TemplateLabPage: React.FC<{
           niche: niche || 'Local Business',
           anthropicApiKey: apiKey.trim() || undefined,
         });
+        const compiled = compilePreview(processed);
         setHtml(processed);
-        setPreviewHtml(preview);
+        setPreviewHtml(compiled);
+        setPreviewKey(k => k + 1);
         setTitle(niche || 'Uploaded Template');
-        setMessages([{ role: 'assistant', content: 'File processed! Your HTML has been converted to a Lunao template with personalization placeholders. Preview is ready below.' }]);
+        setMessages([{ role: 'assistant', content: 'File processed! Preview is ready on the right. Describe any changes you want below.' }]);
         sfx.aiDone();
-        const entry = await createSiteHistory({ title: niche || 'Uploaded Template', niche: niche || 'Local Business', html: processed, snapshotLabel: 'Uploaded HTML' });
+        const entry = await createSiteHistory({
+          title: niche || 'Uploaded Template',
+          niche: niche || 'Local Business',
+          html: processed,
+          snapshotLabel: 'Uploaded HTML',
+        });
         setHistory(prev => [entry as any, ...prev]);
       } catch (err: any) {
         flashError(err?.message || 'Failed to process uploaded file.');
@@ -222,6 +264,9 @@ export const TemplateLabPage: React.FC<{
     e.target.value = '';
   };
 
+  // -------------------------------------------------------------------------
+  // Send prompt to AI
+  // -------------------------------------------------------------------------
   const sendPrompt = async () => {
     const instruction = input.trim();
     if (!instruction || streaming) return;
@@ -244,25 +289,29 @@ export const TemplateLabPage: React.FC<{
         { html: base, instruction, history: history_msgs, anthropicApiKey: apiKey.trim() || undefined },
         (fullSoFar) => {
           setHtml(fullSoFar);
-          // Compile preview: replace {{PLACEHOLDERS}} with demo values for the iframe
           const compiled = compilePreview(fullSoFar);
           const now = Date.now();
-          if (now - lastPush.current > 400) {
+          if (now - lastPush.current > 600) {
             lastPush.current = now;
-            setPreviewHtml(compiled);
+            // Push to iframe immediately
+            if (iframeRef.current) {
+              iframeRef.current.srcdoc = compiled;
+            }
           }
         },
         (thinkingText) => {
-          // Show AI thinking in the chat as it happens
           setThinkingAcc(prev => prev + thinkingText);
         },
       );
 
-      // Final compile for preview
       const finalCompiled = compilePreview(result);
       setHtml(result);
       setPreviewHtml(finalCompiled);
       setThinkingAcc('');
+      // Force iframe reload with fresh compiled content
+      if (iframeRef.current) {
+        iframeRef.current.srcdoc = finalCompiled;
+      }
 
       const summary = summarizeHtml(result);
       setMessages(m => {
@@ -296,16 +345,24 @@ export const TemplateLabPage: React.FC<{
     }
   };
 
+  // -------------------------------------------------------------------------
+  // Load a history entry
+  // -------------------------------------------------------------------------
   const loadEntry = (entry: SiteHistoryEntry) => {
     sfx.open();
+    const compiled = compilePreview(entry.html);
     setHtml(entry.html);
-    setPreviewHtml(entry.html);
+    setPreviewHtml(compiled);
     setTitle(entry.title);
     setNiche(entry.niche);
     setMode('active');
-    setMessages([{ role: 'assistant', content: 'Loaded "' + (entry.snapshotLabel || entry.title) + '". Keep editing below.' }]);
+    setMessages([{ role: 'assistant', content: 'Loaded "' + (entry.snapshotLabel || entry.title) + '". Preview on the right. Keep editing below.' }]);
+    if (iframeRef.current) iframeRef.current.srcdoc = compiled;
   };
 
+  // -------------------------------------------------------------------------
+  // Save as template
+  // -------------------------------------------------------------------------
   const openSave = async () => {
     sfx.tap();
     setSaveOpen(true);
@@ -345,16 +402,6 @@ export const TemplateLabPage: React.FC<{
     }
   };
 
-  const onIframeLoad = () => {
-    const doc = iframeRef.current?.contentDocument;
-    if (!doc) return;
-    doc.addEventListener('input', () => {
-      const c = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-      setHtml(c);
-      setPreviewHtml(c);
-    });
-  };
-
   const relTime = (ms: number | null) => {
     if (!ms) return 'recently';
     const diff = Date.now() - ms * 1000;
@@ -368,16 +415,19 @@ export const TemplateLabPage: React.FC<{
     return new Date(ms * 1000).toLocaleDateString();
   };
 
-  const activeKey = apiKey.trim() || (aiEnabled ? '(server)' : '');
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
+
+  const isActive = mode === 'active';
 
   return (
     <div className="fixed inset-0 z-[60] bg-off-white flex flex-col animate-editor-rise overflow-hidden">
 
       {/* ============================================================
-          TOP HEADER BAR — brand-consistent cream/white
+          TOP HEADER BAR
       ============================================================ */}
-      <div className="flex items-center gap-3 px-5 py-3.5 bg-white border-b border-border-main shrink-0">
-        {/* Back */}
+      <div className="flex items-center gap-3 px-5 py-3 bg-white border-b border-border-main shrink-0">
         <button
           onClick={() => { sfx.close(); onClose(); }}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-border-main text-ink-secondary hover:text-ink hover:border-ink-tertiary text-sm font-medium font-sans active:scale-[0.98] transition-all shadow-sm"
@@ -386,465 +436,426 @@ export const TemplateLabPage: React.FC<{
           Back
         </button>
 
-        {/* Title */}
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-xl bg-accent-soft flex items-center justify-center">
             <FlaskConical className="w-5 h-5 text-accent" />
           </div>
           <div>
             <h1 className="text-base font-bold font-sans text-ink leading-none">Template Lab</h1>
-            <p className="text-[11px] text-ink-tertiary font-sans mt-0.5">Build any website with AI</p>
+            <p className="text-[11px] text-ink-tertiary font-sans mt-0.5">
+              {isActive ? title || 'Editing' : 'Build any website with AI'}
+            </p>
           </div>
         </div>
 
-        {/* Status badge */}
         <div className="ml-auto flex items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-bold font-sans ${
-            mode === 'idle' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+            !isActive ? 'bg-amber-50 text-amber-700 border border-amber-200' :
             streaming ? 'bg-blue-50 text-blue-700 border border-blue-200' :
             'bg-success-soft text-success border border-green-200'
           }`}>
             {streaming && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {mode === 'idle' && <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
-            {mode === 'active' && !streaming && <div className="w-1.5 h-1.5 rounded-full bg-success" />}
-            {streaming ? 'Building\u2026' : mode === 'idle' ? 'Ready' : 'Editing'}
+            {!isActive && <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
+            {isActive && !streaming && <div className="w-1.5 h-1.5 rounded-full bg-success" />}
+            {streaming ? 'Building\u2026' : !isActive ? 'Ready' : 'Editing'}
           </span>
-
           <button
             onClick={() => { sfx.open(); onBrowseTemplates(); }}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white border border-border-main text-ink-secondary hover:text-ink text-sm font-medium font-sans active:scale-[0.98] transition-all shadow-sm"
           >
             <Layout className="w-4 h-4" />
-            Browse Templates
+            Templates
           </button>
         </div>
       </div>
 
       {/* ============================================================
-          WORKSPACE — left sidebar + right preview
+          MAIN WORKSPACE
+          - idle: centered welcome cards
+          - active: 320px left sidebar + right preview
       ============================================================ */}
       <div className="flex flex-1 overflow-hidden">
 
         {/* ----------------------------------------------------
-            LEFT SIDEBAR — white card, matches app aesthetic
+            LEFT SIDEBAR (only shown in active mode)
         ---------------------------------------------------- */}
-        <div className="w-[340px] shrink-0 flex flex-col overflow-hidden border-r border-border-main bg-white">
-
-          {/* ---- API Key section ---- */}
-          <div className="px-4 pt-4 pb-3 border-b border-border-light">
-            <button
-              onClick={() => { sfx.toggle(); setShowApiKey(!showApiKey); }}
-              className="w-full flex items-center gap-2.5 text-[12px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
-            >
-              <div className="w-7 h-7 rounded-lg bg-accent-soft flex items-center justify-center shrink-0">
-                <Key className="w-3.5 h-3.5 text-accent" />
-              </div>
-              <span className="flex-1 text-left">
-                {showApiKey ? 'Your Anthropic key' : 'Anthropic API Key'}
-              </span>
-              <div className={`w-2 h-2 rounded-full shrink-0 ${apiKey.trim() ? 'bg-success' : 'bg-ink-tertiary'}`} />
-              <ChevronDown className={`w-4 h-4 text-ink-tertiary transition-transform ${showApiKey ? 'rotate-180' : ''}`} />
-            </button>
-
-            {showApiKey && (
-              <div className="mt-3 animate-editor-rise space-y-2.5">
-                <div className="relative">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-ant-api03\u2026"
-                    className="w-full pr-20 pl-3 py-2.5 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  />
-                  <a
-                    href="https://console.anthropic.com/settings/keys"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-accent hover:text-accent-hover font-semibold"
-                  >
-                    Get key
-                  </a>
-                </div>
-
-                {/* Status + Set button */}
-                <div className="flex items-center justify-between">
-                  <p className="text-[11px] font-sans">
-                    {apiKey.trim() ? (
-                      <span className="text-success font-medium">Key saved \u2014 will be used for AI generation</span>
-                    ) : (
-                      <span className="text-ink-tertiary">Paste your key above and click Set to save it</span>
-                    )}
-                  </p>
-                  <button
-                    onClick={() => {
-                      if (apiKey.trim()) {
-                        localStorage.setItem('lunao_user_anthropic_key', apiKey.trim());
-                        sfx.saved();
-                      }
-                    }}
-                    disabled={!apiKey.trim()}
-                    className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold font-sans hover:bg-accent-hover active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {apiKey.trim() ? 'Set' : 'Set'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ---- How it works — feature cards ---- */}
-          <div className="px-4 pt-3 pb-2 border-b border-border-light">
-            <span className="text-[11px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">How it works</span>
-            <div className="mt-2 space-y-1.5">
-              {[
-                { icon: String.fromCodePoint(0x270F, 0xFE0F), label: 'Describe your site', hint: 'e.g. Modern dental clinic with amber tones' },
-                { icon: String.fromCodePoint(0x1F3AF), label: 'AI builds instantly', hint: 'Live preview updates as AI writes' },
-                { icon: String.fromCodePoint(0x1F4C1), label: 'Save as template', hint: 'Convert to reusable Lunao template' },
-              ].map(f => (
-                <div key={f.label} className="flex items-start gap-2 px-3 py-2 rounded-xl bg-off-white">
-                  <span className="text-base leading-none mt-0.5">{f.icon}</span>
-                  <div>
-                    <p className="text-[11px] font-semibold font-sans text-ink leading-tight">{f.label}</p>
-                    <p className="text-[10px] font-sans text-ink-tertiary leading-tight mt-0.5">{f.hint}</p>
+        <div
+          className={`shrink-0 flex flex-col overflow-hidden bg-white border-r border-border-main transition-all duration-300 ease-in-out ${
+            isActive ? 'w-[320px]' : 'w-0'
+          }`}
+        >
+          {isActive && (
+            <>
+              {/* ---- API Key ---- */}
+              <div className="px-4 pt-4 pb-3 border-b border-border-light">
+                <button
+                  onClick={() => { sfx.toggle(); setShowApiKey(!showApiKey); }}
+                  className="w-full flex items-center gap-2 text-[12px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
+                >
+                  <div className="w-7 h-7 rounded-lg bg-accent-soft flex items-center justify-center shrink-0">
+                    <Key className="w-3.5 h-3.5 text-accent" />
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
+                  <span className="flex-1 text-left text-xs">Anthropic Key</span>
+                  <div className={`w-2 h-2 rounded-full shrink-0 ${apiKey.trim() ? 'bg-success' : 'bg-ink-tertiary'}`} />
+                  <ChevronDown className={`w-3.5 h-3.5 text-ink-tertiary transition-transform ${showApiKey ? 'rotate-180' : ''}`} />
+                </button>
 
-          {/* ---- Previous Builds ---- */}
-          <div className="px-4 py-3 border-b border-border-light">
-            <div className="flex items-center justify-between mb-2.5">
-              <span className="text-[11px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Recent Builds</span>
-              <span className="text-[11px] font-sans text-ink-tertiary">{history.length > 0 ? history.length : ''}</span>
-            </div>
-            <div className="space-y-1 max-h-32 overflow-y-auto scrollbar-none">
-              {loadingHistory ? (
-                <div className="flex items-center justify-center py-3">
-                  <Loader2 className="w-4 h-4 animate-spin text-ink-tertiary" />
-                </div>
-              ) : history.length === 0 ? (
-                <p className="text-[11px] text-ink-tertiary font-sans italic text-center py-2">Your recent builds will appear here</p>
-              ) : (
-                history.slice(0, 6).map(entry => (
-                  <button
-                    key={entry.id}
-                    onClick={() => loadEntry(entry)}
-                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-accent-soft transition-colors group"
-                  >
-                    <p className="text-xs font-semibold font-sans text-ink group-hover:text-accent truncate">
-                      {entry.title || entry.snapshotLabel || 'Build'}
-                    </p>
-                    <p className="text-[10px] font-sans text-ink-tertiary mt-0.5">{relTime(entry.createdAt)} · {entry.niche}</p>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* ---- Vibe Code Prompt ---- */}
-          <div className="px-4 py-3 border-b border-border-light">
-            <button
-              onClick={() => { sfx.toggle(); setShowVibePrompt(!showVibePrompt); }}
-              className="w-full flex items-center gap-2.5 text-[12px] font-semibold font-sans text-ink-secondary hover:text-ink transition-colors"
-            >
-              <div className="w-7 h-7 rounded-lg bg-off-white flex items-center justify-center shrink-0">
-                <Code2 className="w-3.5 h-3.5 text-ink-secondary" />
-              </div>
-              <span className="flex-1 text-left">Vibe-code prompt</span>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${showVibePrompt ? 'bg-accent-soft text-accent' : 'bg-off-white text-ink-tertiary'}`}>
-                {showVibePrompt ? 'Hide' : 'Copy'}
-              </span>
-            </button>
-            {showVibePrompt && (
-              <div className="mt-3 animate-editor-rise">
-                <div className="bg-off-white border border-border-main rounded-xl p-3">
-                  <p className="text-[10px] font-sans text-ink-tertiary leading-relaxed mb-2">
-                    Paste this in Cursor, Bolt, or any AI coding tool to vibe-code outside Lunao:
-                  </p>
-                  <div className="bg-white rounded-lg p-2 max-h-28 overflow-y-auto border border-border-light">
-                    <pre className="text-[9px] font-mono text-ink-secondary whitespace-pre-wrap leading-relaxed">{VIBE_CODE_PROMPT}</pre>
+                {showApiKey && (
+                  <div className="mt-3 space-y-2">
+                    <div className="relative">
+                      <input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="sk-ant-api03\u2026"
+                        className="w-full pr-20 pl-3 py-2 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                      />
+                      <a
+                        href="https://console.anthropic.com/settings/keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-accent hover:text-accent-hover font-semibold"
+                      >
+                        Get key
+                      </a>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-sans text-ink-tertiary">
+                        {apiKey.trim() ? 'Key saved \u2014 used for generation' : 'Paste key + click Set'}
+                      </p>
+                      <button
+                        onClick={() => {
+                          if (apiKey.trim()) {
+                            localStorage.setItem('lunao_user_anthropic_key', apiKey.trim());
+                            sfx.saved();
+                          }
+                        }}
+                        disabled={!apiKey.trim()}
+                        className="inline-flex items-center px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold font-sans hover:bg-accent-hover active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Set
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(VIBE_CODE_PROMPT);
-                      sfx.copy();
-                      setVibeCopied(true);
-                      setTimeout(() => setVibeCopied(false), 2000);
-                    }}
-                    className="mt-2 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-accent text-white text-xs font-bold font-sans hover:bg-accent-hover active:scale-[0.98] transition-all"
-                  >
-                    {vibeCopied ? (
-                      <><CheckSquare className="w-3.5 h-3.5" /> Copied!</>
-                    ) : (
-                      <><Copy className="w-3.5 h-3.5" /> Copy prompt</>
-                    )}
-                  </button>
-                </div>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* ---- Chat messages ---- */}
-          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2 min-h-0">
-            {messages.length === 0 && (
-              <div className="text-center pt-3">
-                <p className="text-[11px] text-ink-tertiary font-sans italic">
-                  Describe a website and AI will build it\u2026
-                </p>
+              {/* ---- Chat messages ---- */}
+              <div className="flex-1 overflow-y-auto px-4 pt-3 pb-2 space-y-2 min-h-0">
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[93%] rounded-2xl px-3 py-2.5 text-[12px] font-sans leading-relaxed ${
+                      m.role === 'user'
+                        ? 'bg-accent text-white rounded-br-sm'
+                        : 'bg-off-white border border-border-light text-ink rounded-bl-sm'
+                    }`}>
+                      {m.content || (
+                        <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Working\u2026</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {/* AI thinking bubble */}
+                {streaming && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[93%] rounded-2xl px-3 py-2.5 bg-off-white border border-border-light rounded-bl-sm">
+                      <div className="flex items-center gap-1 mb-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+                        <span className="text-[10px] text-accent font-semibold font-sans">Thinking</span>
+                      </div>
+                      {thinkingAcc ? (
+                        <p className="text-[11px] text-ink-secondary font-sans leading-relaxed italic">
+                          {thinkingAcc.slice(-200)}
+                        </p>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-ink-tertiary font-sans animate-pulse">
+                          <Loader2 className="w-3 h-3 animate-spin" /> Preparing…
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
               </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[92%] rounded-2xl px-3.5 py-2.5 text-[12px] font-sans leading-relaxed ${
-                  m.role === 'user'
-                    ? 'bg-accent text-white rounded-br-sm'
-                    : 'bg-off-white border border-border-light text-ink rounded-bl-sm'
-                }`}>
-                  {m.content || <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Working\u2026</span>}
+
+              {/* ---- Recent builds ---- */}
+              <div className="px-4 py-2 border-t border-border-light">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold font-sans text-ink-tertiary uppercase tracking-wide">Recent</span>
+                </div>
+                <div className="space-y-0.5 max-h-20 overflow-y-auto">
+                  {history.slice(0, 4).map(entry => (
+                    <button
+                      key={entry.id}
+                      onClick={() => loadEntry(entry)}
+                      className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-accent-soft transition-colors group"
+                    >
+                      <p className="text-[11px] font-semibold font-sans text-ink group-hover:text-accent truncate">
+                        {entry.title || entry.snapshotLabel || 'Build'}
+                      </p>
+                    </button>
+                  ))}
                 </div>
               </div>
-            ))}
-            {streaming && (
-              <div className="flex justify-start">
-                <div className="max-w-[92%] rounded-2xl px-3.5 py-2.5 bg-off-white border border-border-light rounded-bl-sm">
-                  <div className="flex items-center gap-1 mb-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-                    <span className="text-[11px] text-accent font-semibold font-sans">Thinking</span>
+
+              {/* ---- Input ---- */}
+              <div className="px-4 pb-4 pt-2 space-y-2 border-t border-border-light shrink-0">
+                {labError && (
+                  <div className="px-3 py-2 rounded-xl bg-red-50 border border-red-200 text-red-600 text-[10px] font-sans flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    {labError}
                   </div>
-                  {thinkingAcc ? (
-                    <p className="text-[11px] text-ink-secondary font-sans leading-relaxed italic">
-                      {thinkingAcc.slice(-300)}
-                    </p>
+                )}
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendPrompt();
+                    }
+                  }}
+                  placeholder="Describe a change\u2026 e.g. Change site name to Radiant Dental"
+                  disabled={streaming}
+                  rows={2}
+                  className="w-full resize-none rounded-xl border border-border-main bg-off-white px-3 py-2 text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50 scrollbar-none"
+                />
+                <button
+                  onClick={sendPrompt}
+                  disabled={streaming || !input.trim() || (!aiEnabled && !apiKey.trim())}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent-hover active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {streaming ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Building\u2026</>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-[12px] text-ink-tertiary font-sans animate-pulse">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Preparing…
-                    </span>
+                    <><Wand2 className="w-4 h-4" /> Edit Site</>
                   )}
-                </div>
+                </button>
               </div>
-            )}
-          </div>
-
-          {/* ---- Error ---- */}
-          {labError && (
-            <div className="mx-4 mb-2 px-3 py-2.5 rounded-xl bg-red-50 border border-red-200 text-red-600 text-[11px] font-sans flex items-start gap-1.5">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              {labError}
-            </div>
+            </>
           )}
-
-          {/* ---- Input + actions ---- */}
-          <div className="px-4 pb-4 pt-2 space-y-2.5 border-t border-border-light shrink-0">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendPrompt();
-                }
-              }}
-              placeholder="Describe your website\u2026 e.g. Modern dental clinic with amber tones, hero with booking CTA\u2026"
-              disabled={streaming}
-              rows={3}
-              className="w-full resize-none rounded-xl border border-border-main bg-off-white px-3.5 py-2.5 text-xs font-sans text-ink placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all disabled:opacity-50 scrollbar-none"
-            />
-
-            <button
-              onClick={sendPrompt}
-              disabled={streaming || !input.trim() || (!aiEnabled && !apiKey.trim())}
-              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent-hover active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {streaming ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Building\u2026</>
-              ) : (
-                <><Sparkles className="w-4 h-4" /> Build My Website</>
-              )}
-            </button>
-
-            <button
-              onClick={() => { sfx.tap(); fileInputRef.current?.click(); }}
-              disabled={uploading}
-              className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-dashed border-border-main text-ink-secondary hover:text-ink hover:border-accent text-xs font-sans transition-all"
-            >
-              {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-              {uploading ? 'Processing\u2026' : 'or upload a .html file'}
-            </button>
-            {uploadError && (
-              <p className="text-[11px] text-red-500 font-sans text-center">{uploadError}</p>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".html,text/html"
-              className="hidden"
-              onChange={handleFileUpload}
-            />
-          </div>
         </div>
 
         {/* ----------------------------------------------------
-            RIGHT PANEL — light gray bg, preview area
+            MAIN CONTENT — welcome OR preview
         ---------------------------------------------------- */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-off-white">
+        <div className="flex-1 flex flex-col overflow-hidden">
 
-          {/* ---- Toolbar ---- */}
-          <div className="flex items-center gap-3 px-5 py-3 bg-white border-b border-border-main shrink-0">
-            {/* Device toggle */}
-            <div className="flex items-center bg-off-white rounded-xl p-1 gap-0.5">
-              <button
-                onClick={() => { sfx.toggle(); setDevice('desktop'); }}
-                className={`p-2 rounded-lg transition-all ${device === 'desktop' ? 'bg-white shadow-sm text-accent' : 'text-ink-tertiary hover:text-ink'}`}
-                title="Desktop"
-              >
-                <Monitor className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => { sfx.toggle(); setDevice('mobile'); }}
-                className={`p-2 rounded-lg transition-all ${device === 'mobile' ? 'bg-white shadow-sm text-accent' : 'text-ink-tertiary hover:text-ink'}`}
-                title="Mobile"
-              >
-                <Smartphone className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Status */}
-            <div className="flex items-center gap-1.5 text-[12px] font-sans text-ink-tertiary">
-              <FlaskConical className="w-4 h-4" />
-              {mode === 'idle' ? 'Describe your website above' : 'Live preview \u2014 keep editing below'}
-            </div>
-
-            <div className="ml-auto flex items-center gap-2">
-              {/* New / reset */}
-              {mode === 'active' && (
-                <button
-                  onClick={() => {
-                    sfx.tap();
-                    setMode('idle');
-                    setHtml('');
-                    setPreviewHtml('');
-                    setMessages([]);
-                    setTitle('');
-                    setNiche('');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-border-main text-ink-secondary hover:text-ink text-sm font-medium font-sans active:scale-[0.98] transition-all bg-white shadow-sm"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" /> New
-                </button>
-              )}
-
-              {/* Convert to template */}
-              {mode === 'active' && html && (
-                <button
-                  onClick={openSave}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent-hover active:scale-[0.98] transition-all"
-                >
-                  <BookmarkPlus className="w-4 h-4" /> Convert to Template
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* ---- Preview area ---- */}
-          <div className="flex-1 overflow-auto flex justify-center items-start p-6">
-            {mode === 'idle' ? (
-              /* ---- IDLE: welcome + quick-start cards ---- */
-              <div className="w-full max-w-3xl animate-editor-rise">
-
-                {/* Hero text */}
+          {/* ========== WELCOME / IDLE MODE ========== */}
+          {!isActive && (
+            <div className="flex-1 overflow-y-auto flex justify-center items-start pt-10 pb-6 px-6">
+              <div className="w-full max-w-2xl animate-editor-rise">
+                {/* Hero */}
                 <div className="text-center mb-8">
                   <div className="w-16 h-16 rounded-2xl bg-accent-soft flex items-center justify-center mx-auto mb-4">
                     <FlaskConical className="w-8 h-8 text-accent" />
                   </div>
                   <h2 className="text-2xl font-bold font-sans text-ink mb-2">Build any website with AI</h2>
-                  <p className="text-sm text-ink-secondary font-sans max-w-lg mx-auto leading-relaxed">
+                  <p className="text-sm text-ink-secondary font-sans max-w-md mx-auto leading-relaxed">
                     Describe what you want in plain English. AI writes the complete HTML \u2014 preview it live, edit it, and save it as a reusable template.
                   </p>
                 </div>
 
-                {/* Quick-start grid */}
+                {/* How it works cards */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
                   {[
-                    {
-                      emoji: String.fromCodePoint(0x1F9E7),
-                      label: 'Dental Clinic',
-                      prompt: 'A modern dental clinic website with warm amber tones, hero section with booking CTA, services grid, patient testimonials, before/after gallery, and contact form.',
-                      color: '#0EA5A0',
-                    },
-                    {
-                      emoji: String.fromCodePoint(0x1F3E8),
-                      label: 'Barber Shop',
-                      prompt: 'A luxury barber shop website with dark wood tones, vintage aesthetic, services menu with prices, about the barbers section, and a booking CTA.',
-                      color: '#C9A96E',
-                    },
-                    {
-                      emoji: String.fromCodePoint(0x2744, 0xFE0F),
-                      label: 'HVAC Service',
-                      prompt: 'A bold HVAC company website with navy and orange, 24/7 emergency banner, services checklist, service area map, and a CTA to call.',
-                      color: '#F97316',
-                    },
-                  ].map(item => (
-                    <button
-                      key={item.label}
-                      onClick={() => {
-                        sfx.tap();
-                        setNiche(item.label);
-                        setInput(item.prompt);
-                        setMode('active');
-                      }}
-                      className="group flex flex-col items-center gap-2 p-5 rounded-2xl bg-white border border-border-main hover:border-[var(--c,theme(colors.accent.DEFAULT))] hover:shadow-lg transition-all text-center"
-                      style={{ '--c': item.color } as React.CSSProperties}
-                    >
-                      <span className="text-4xl">{item.emoji}</span>
-                      <span className="text-sm font-bold font-sans text-ink">{item.label}</span>
-                      <span className="text-[10px] text-ink-tertiary font-sans">Tap to start</span>
-                    </button>
+                    { icon: String.fromCodePoint(0x270F, 0xFE0F), label: 'Describe your site', hint: 'e.g. Modern dental clinic with amber tones, hero with booking CTA' },
+                    { icon: String.fromCodePoint(0x1F3AF), label: 'AI builds instantly', hint: 'Live preview updates as AI writes \u2014 see changes in real-time' },
+                    { icon: String.fromCodePoint(0x1F4C1), label: 'Save as template', hint: 'Convert to reusable Lunao template and use in campaigns' },
+                  ].map(f => (
+                    <div key={f.label} className="flex items-start gap-3 p-4 rounded-2xl bg-white border border-border-main">
+                      <span className="text-2xl leading-none mt-0.5">{f.icon}</span>
+                      <div>
+                        <p className="text-sm font-bold font-sans text-ink leading-tight">{f.label}</p>
+                        <p className="text-[11px] font-sans text-ink-tertiary leading-relaxed mt-1">{f.hint}</p>
+                      </div>
+                    </div>
                   ))}
                 </div>
 
-                {/* Upload section */}
-                <div className="bg-white rounded-2xl border border-dashed border-border-main p-6 text-center">
+                {/* Quick-start */}
+                <div className="bg-white rounded-2xl border border-border-main p-5 mb-4">
+                  <p className="text-xs font-bold font-sans text-ink-tertiary uppercase tracking-wide mb-3">Quick start</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {[
+                      { emoji: String.fromCodePoint(0x1F9E7), label: 'Dental Clinic', prompt: 'A modern dental clinic website with warm amber tones, hero section with booking CTA, services grid, patient testimonials, and contact form.', color: '#0EA5A0' },
+                      { emoji: String.fromCodePoint(0x1F3E8), label: 'Barber Shop', prompt: 'A luxury barber shop website with dark wood tones, vintage aesthetic, services menu with prices, about the barbers section, and a booking CTA.', color: '#C9A96E' },
+                      { emoji: String.fromCodePoint(0x2744, 0xFE0F), label: 'HVAC Service', prompt: 'A bold HVAC company website with navy and orange, 24/7 emergency banner, services checklist, and a CTA to call.', color: '#F97316' },
+                    ].map(item => (
+                      <button
+                        key={item.label}
+                        onClick={() => {
+                          sfx.tap();
+                          setNiche(item.label);
+                          setInput(item.prompt);
+                          setMode('active');
+                          setMessages([{ role: 'user', content: item.prompt }]);
+                          setStreaming(true);
+                          setThinkingAcc('');
+                          setLabError(null);
+                          streamAiEdit(
+                            { html: BLANK_CANVAS, instruction: item.prompt, anthropicApiKey: apiKey.trim() || undefined },
+                            (fullSoFar) => {
+                              setHtml(fullSoFar);
+                              const compiled = compilePreview(fullSoFar);
+                              if (iframeRef.current) iframeRef.current.srcdoc = compiled;
+                            },
+                            (thinkingText) => setThinkingAcc(prev => prev + thinkingText),
+                          ).then(result => {
+                            const finalCompiled = compilePreview(result);
+                            setHtml(result);
+                            setPreviewHtml(finalCompiled);
+                            setThinkingAcc('');
+                            if (iframeRef.current) iframeRef.current.srcdoc = finalCompiled;
+                            setMessages(m => {
+                              const next = [...m];
+                              next[next.length - 1] = { role: 'assistant', content: summarizeHtml(result) || 'Done! Preview ready.' };
+                              return next;
+                            });
+                            sfx.aiDone();
+                            createSiteHistory({ title: item.label, niche: item.label, html: result, snapshotLabel: item.prompt.slice(0, 60) }).catch(() => {});
+                          }).catch((err: any) => {
+                            sfx.error();
+                            setThinkingAcc('');
+                            setMessages(m => {
+                              const next = [...m];
+                              next[next.length - 1] = { role: 'assistant', content: 'Error: ' + (err?.message || 'Generation failed.') };
+                              return next;
+                            });
+                          }).finally(() => setStreaming(false));
+                        }}
+                        className="flex flex-col items-center gap-1.5 p-4 rounded-xl border border-border-main hover:border-[var(--c)] hover:shadow-md transition-all text-center"
+                        style={{ '--c': item.color } as React.CSSProperties}
+                      >
+                        <span className="text-3xl">{item.emoji}</span>
+                        <span className="text-xs font-bold font-sans text-ink">{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Upload */}
+                <div className="bg-white rounded-2xl border border-dashed border-border-main p-5 text-center">
                   <p className="text-sm font-semibold font-sans text-ink mb-1">Have an HTML file?</p>
-                  <p className="text-xs text-ink-secondary font-sans mb-4 max-w-sm mx-auto">
-                    Upload it and AI will convert it to a Lunao template automatically \u2014 adding all the personalization placeholders.
+                  <p className="text-xs text-ink-secondary font-sans mb-4">
+                    Upload it and AI will convert it to a Lunao template \u2014 adding all personalization placeholders automatically.
                   </p>
                   <button
                     onClick={() => { sfx.tap(); fileInputRef.current?.click(); }}
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-accent text-white text-sm font-bold font-sans hover:bg-accent-hover active:scale-[0.98] transition-all shadow-sm"
+                    disabled={uploading}
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-accent text-white text-sm font-bold font-sans hover:bg-accent-hover active:scale-[0.98] transition-all shadow-sm disabled:opacity-50"
                   >
-                    <Upload className="w-4 h-4" /> Upload HTML File
+                    {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    {uploading ? 'Processing\u2026' : 'Upload HTML File'}
                   </button>
-                  <p className="mt-3 text-[10px] text-ink-tertiary font-sans">
-                    Max 10MB \u00b7 Single .html file only
-                  </p>
+                  {uploadError && (
+                    <p className="mt-2 text-xs text-red-500 font-sans">{uploadError}</p>
+                  )}
+                  <input ref={fileInputRef} type="file" accept=".html,text/html" className="hidden" onChange={handleFileUpload} />
+                  <p className="mt-3 text-[10px] text-ink-tertiary font-sans">Max 10MB \u00b7 Single .html file</p>
                 </div>
               </div>
-            ) : (
-              /* ---- ACTIVE: live preview iframe ---- */
-              <div
-                className={`w-full bg-white rounded-2xl border border-border-main shadow-lg overflow-hidden transition-all ${
-                  device === 'mobile' ? 'max-w-[400px]' : 'max-w-[1100px]'
-                }`}
-                style={{ minHeight: 'calc(100vh - 220px)' }}
-              >
+            </div>
+          )}
+
+          {/* ========== PREVIEW MODE (active) ========== */}
+          {isActive && (
+            <>
+              {/* Toolbar */}
+              <div className="flex items-center gap-3 px-5 py-2.5 bg-white border-b border-border-main shrink-0">
+                {/* Device toggle */}
+                <div className="flex items-center bg-off-white rounded-xl p-1 gap-0.5">
+                  <button
+                    onClick={() => { sfx.toggle(); setDevice('desktop'); }}
+                    className={`p-2 rounded-lg transition-all ${device === 'desktop' ? 'bg-white shadow-sm text-accent' : 'text-ink-tertiary hover:text-ink'}`}
+                    title="Desktop"
+                  >
+                    <Monitor className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => { sfx.toggle(); setDevice('mobile'); }}
+                    className={`p-2 rounded-lg transition-all ${device === 'mobile' ? 'bg-white shadow-sm text-accent' : 'text-ink-tertiary hover:text-ink'}`}
+                    title="Mobile"
+                  >
+                    <Smartphone className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Site title */}
+                <div className="flex items-center gap-1.5 text-xs font-semibold font-sans text-ink-secondary">
+                  <FlaskConical className="w-3.5 h-3.5" />
+                  <span className="max-w-[200px] truncate">{title || 'Site preview'}</span>
+                </div>
+
+                {/* Build indicator */}
                 {streaming && (
-                  <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-xs font-sans text-blue-700">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Generating your website in real-time\u2026
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-xs font-semibold font-sans text-blue-600">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Generating
                   </div>
                 )}
-                <iframe
-                  ref={iframeRef}
-                  srcDoc={previewHtml || html || BLANK_CANVAS}
-                  onLoad={onIframeLoad}
-                  title="Site preview"
-                  className="w-full border-0 bg-white block"
-                  style={{ minHeight: 'calc(100vh - 240px)' }}
-                />
+
+                <div className="ml-auto flex items-center gap-2">
+                  {/* Refresh */}
+                  <button
+                    onClick={refreshPreview}
+                    title="Refresh preview"
+                    className="p-2 rounded-xl border border-border-main text-ink-secondary hover:text-ink hover:border-ink-tertiary active:scale-[0.97] transition-all bg-white shadow-sm"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+
+                  {/* New */}
+                  <button
+                    onClick={() => {
+                      sfx.tap();
+                      setMode('idle');
+                      setHtml('');
+                      setPreviewHtml('');
+                      setMessages([]);
+                      setTitle('');
+                      setNiche('');
+                      setThinkingAcc('');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-border-main text-ink-secondary hover:text-ink text-sm font-medium font-sans active:scale-[0.98] transition-all bg-white shadow-sm"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> New
+                  </button>
+
+                  {/* Convert to Template */}
+                  {html && (
+                    <button
+                      onClick={openSave}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-accent text-white text-sm font-bold font-sans shadow-sm hover:bg-accent-hover active:scale-[0.98] transition-all"
+                    >
+                      <BookmarkPlus className="w-4 h-4" /> Save as Template
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+
+              {/* Preview iframe */}
+              <div className="flex-1 overflow-auto flex justify-center items-start p-5 bg-off-white">
+                <div
+                  key={previewKey}
+                  className={`w-full bg-white rounded-2xl border border-border-main shadow-lg overflow-hidden ${
+                    device === 'mobile' ? 'max-w-[400px]' : 'max-w-[1100px]'
+                  }`}
+                  style={{ minHeight: 'calc(100vh - 170px)' }}
+                >
+                  <iframe
+                    ref={iframeRef}
+                    srcdoc={previewHtml || BLANK_CANVAS}
+                    title="Site preview"
+                    className="w-full border-0 bg-white block"
+                    style={{ minHeight: 'calc(100vh - 200px)' }}
+                  />
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -860,7 +871,6 @@ export const TemplateLabPage: React.FC<{
             className="w-full max-w-md bg-white rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.15)] p-6 animate-editor-rise"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Dialog header */}
             <div className="flex items-start justify-between mb-5">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-accent-soft flex items-center justify-center">
@@ -879,7 +889,6 @@ export const TemplateLabPage: React.FC<{
               </button>
             </div>
 
-            {/* Template name */}
             <div className="mb-4">
               <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Template Name</label>
               <input
@@ -891,7 +900,6 @@ export const TemplateLabPage: React.FC<{
               />
             </div>
 
-            {/* Category */}
             <div className="mb-5">
               <label className="block text-xs font-semibold font-sans text-ink-secondary mb-1.5">Category</label>
               <div className="flex flex-wrap gap-2">
@@ -951,7 +959,6 @@ export const TemplateLabPage: React.FC<{
               )}
             </div>
 
-            {/* Actions */}
             <div className="flex gap-2.5">
               <button
                 onClick={() => { sfx.close(); setSaveOpen(false); }}
