@@ -1175,6 +1175,7 @@ const SAMPLE_PROMPTS = [
 ];
 
 // Template Lab hero section — shown above the site grid in the Editor list view.
+const TemplateLabBanner: React.FC<{
   aiEnabled: boolean;
   onBrowseTemplates: () => void;
   onCreateNew: () => void;
@@ -1230,6 +1231,7 @@ const SAMPLE_PROMPTS = [
 
 // ===========================================================================
 // CREATE TEMPLATE MODAL — full-screen slide-up sheet
+// =========================================================================== — full-screen slide-up sheet
 // ===========================================================================
 
 const NICHE_OPTIONS = [
