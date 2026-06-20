@@ -347,9 +347,10 @@ export async function generateTemplateHtml(prompt, niche = 'Local Business', api
 /**
  * Stream an AI edit. Calls onChunk(textDelta) as tokens arrive.
  * Returns the full accumulated text when done.
+ * If anthropicApiKey is provided it takes precedence over the server key.
  */
-export async function streamEdit({ html, instruction, history }, onChunk) {
-  const c = getClient();
+export async function streamEdit({ html, instruction, history, anthropicApiKey }, onChunk) {
+  const c = buildClient(anthropicApiKey);
   if (!c) throw new Error('AI editor is not configured (missing ANTHROPIC_API_KEY).');
 
   const stream = await c.messages.stream({

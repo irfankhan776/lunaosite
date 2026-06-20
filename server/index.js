@@ -348,8 +348,9 @@ app.post('/api/sites/:slug/deploy', async (req, res) => {
 
 // AI code edit (SSE). Streams Claude's HTML output chunk-by-chunk so the
 // editor can refresh its live preview as the code is written.
+// Supports user-supplied anthropicApiKey for BYOK usage.
 app.post('/api/ai/edit', async (req, res) => {
-  const { html, instruction, history } = req.body || {};
+  const { html, instruction, history, anthropicApiKey } = req.body || {};
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -357,8 +358,10 @@ app.post('/api/ai/edit', async (req, res) => {
   res.flushHeaders?.();
   const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
 
-  if (!isAiEnabled()) {
-    send({ type: 'error', error: 'AI editor is not configured. Add ANTHROPIC_API_KEY to enable it.' });
+  // Require either a user-supplied key or a server-side key
+  const hasUserKey = typeof anthropicApiKey === 'string' && anthropicApiKey.trim().length > 10;
+  if (!hasUserKey && !isAiEnabled()) {
+    send({ type: 'error', error: 'AI editor needs an Anthropic key. Add yours below or configure ANTHROPIC_API_KEY on the server.' });
     return res.end();
   }
   if (typeof html !== 'string' || !html.trim() || typeof instruction !== 'string' || !instruction.trim()) {
@@ -368,7 +371,7 @@ app.post('/api/ai/edit', async (req, res) => {
 
   try {
     send({ type: 'start' });
-    const full = await streamEdit({ html, instruction, history }, (delta) => {
+    const full = await streamEdit({ html, instruction, history, anthropicApiKey }, (delta) => {
       send({ type: 'chunk', delta });
     });
     send({ type: 'done', html: cleanHtmlOutput(full) });

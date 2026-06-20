@@ -589,7 +589,7 @@ export async function getSmsStatus(): Promise<{
 // Stream an AI edit. onChunk receives the growing full HTML as it's written so
 // the editor can refresh its live preview in real time. Resolves with final HTML.
 export async function streamAiEdit(
-  params: { html: string; instruction: string; history?: AiChatMessage[] },
+  params: { html: string; instruction: string; history?: AiChatMessage[]; anthropicApiKey?: string },
   onChunk: (fullHtmlSoFar: string, delta: string) => void,
 ): Promise<string> {
   const res = await fetch(`${API_BASE}/api/ai/edit`, {

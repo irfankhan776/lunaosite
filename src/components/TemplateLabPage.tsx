@@ -8,6 +8,7 @@ import {
   AiChatMessage, SiteHistoryEntry,
   listSiteHistory, createSiteHistory, convertHistoryToTemplate,
   streamAiEdit, processUploadedHtml,
+  listTemplateCategories, createTemplateCategory,
 } from '../lib/pipelineClient';
 import {
   playSoftTap, playTiktokLike, playSlideTick, playDialogPop, playSoftBubble,
@@ -113,6 +114,9 @@ export const TemplateLabPage: React.FC<{
       .then(h => setHistory(h))
       .catch(() => setHistory([]))
       .finally(() => setLoadingHistory(false));
+    // Load saved API key from localStorage
+    const savedKey = localStorage.getItem('lunao_user_anthropic_key');
+    if (savedKey) setApiKey(savedKey);
   }, []);
 
   const flashError = (msg: string) => {
@@ -185,7 +189,7 @@ export const TemplateLabPage: React.FC<{
     try {
       const base = html || BLANK_CANVAS;
       const result = await streamAiEdit(
-        { html: base, instruction, history: history_msgs },
+        { html: base, instruction, history: history_msgs, anthropicApiKey: apiKey.trim() || undefined },
         (fullSoFar) => {
           setHtml(fullSoFar);
           const now = Date.now();
@@ -238,7 +242,6 @@ export const TemplateLabPage: React.FC<{
     setSaveNewCatColor('#2563EB');
     setShowNewCat(false);
     try {
-      const { listTemplateCategories } = await import('../lib/pipelineClient');
       const cats = await listTemplateCategories();
       setCategories(cats.map((c: any) => ({ id: c.id, name: c.name, color: c.color })));
     } catch { setCategories([]); }
@@ -251,13 +254,11 @@ export const TemplateLabPage: React.FC<{
     try {
       let catId = saveCategory;
       if (showNewCat && saveNewCat.trim()) {
-        const { createTemplateCategory } = await import('../lib/pipelineClient');
         const cat = await createTemplateCategory({ name: saveNewCat.trim(), color: saveNewCatColor });
         catId = cat.id;
         setCategories(prev => [...prev, { id: cat.id, name: cat.name, color: cat.color }]);
       }
       const entry = await createSiteHistory({ title: saveName.trim(), niche, html });
-      const { convertHistoryToTemplate } = await import('../lib/pipelineClient');
       const result = await convertHistoryToTemplate({ historyId: entry.id, name: saveName.trim(), categoryId: catId, niche });
       sfx.deployed();
       flashToast({ type: 'success', text: '"' + result.name + '" saved as a template!' });
@@ -366,20 +367,21 @@ export const TemplateLabPage: React.FC<{
                 <Key className="w-3.5 h-3.5 text-accent" />
               </div>
               <span className="flex-1 text-left">
-                {showApiKey ? 'Your Anthropic key' : 'Add Anthropic key'}
+                {showApiKey ? 'Your Anthropic key' : 'Anthropic API Key'}
               </span>
+              <div className={`w-2 h-2 rounded-full shrink-0 ${apiKey.trim() ? 'bg-success' : 'bg-ink-tertiary'}`} />
               <ChevronDown className={`w-4 h-4 text-ink-tertiary transition-transform ${showApiKey ? 'rotate-180' : ''}`} />
             </button>
 
             {showApiKey && (
-              <div className="mt-3 animate-editor-rise">
+              <div className="mt-3 animate-editor-rise space-y-2.5">
                 <div className="relative">
                   <input
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder="sk-ant-api03\u2026"
-                    className="w-full px-3 py-2.5 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+                    className="w-full pr-20 pl-3 py-2.5 rounded-xl border border-border-main bg-off-white text-ink text-xs font-mono placeholder:text-ink-tertiary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
                   />
                   <a
                     href="https://console.anthropic.com/settings/keys"
@@ -390,15 +392,29 @@ export const TemplateLabPage: React.FC<{
                     Get key
                   </a>
                 </div>
-                <p className="mt-2 text-[11px] font-sans text-ink-tertiary">
-                  {activeKey ? (
-                    <span className="text-success font-medium">
-                      {apiKey.trim() ? 'Using your key' : 'Using server key'}
-                    </span>
-                  ) : (
-                    'Enter your key to enable AI generation'
-                  )}
-                </p>
+
+                {/* Status + Set button */}
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-sans">
+                    {apiKey.trim() ? (
+                      <span className="text-success font-medium">Key saved \u2014 will be used for AI generation</span>
+                    ) : (
+                      <span className="text-ink-tertiary">Paste your key above and click Set to save it</span>
+                    )}
+                  </p>
+                  <button
+                    onClick={() => {
+                      if (apiKey.trim()) {
+                        localStorage.setItem('lunao_user_anthropic_key', apiKey.trim());
+                        sfx.saved();
+                      }
+                    }}
+                    disabled={!apiKey.trim()}
+                    className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-accent text-white text-[11px] font-bold font-sans hover:bg-accent-hover active:scale-[0.97] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {apiKey.trim() ? 'Set' : 'Set'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
