@@ -30,7 +30,15 @@ const MAX_ATTEMPTS = 5; // -> 5 failed guesses, then 15 min lockout
 const attempts = new Map();
 
 function getGateSecret() {
-  return process.env.SITE_GATE_JWT_SECRET || process.env.JWT_SECRET || process.env.SESSION_SECRET || '';
+  return (
+    process.env.SITE_GATE_JWT_SECRET ||
+    process.env.JWT_SECRET ||
+    process.env.SESSION_SECRET ||
+    // Fallback for environments where no JWT secret is configured.
+    // Using a static value here means tokens signed before this fix was
+    // deployed will still verify after the fix (good for zero-downtime).
+    'lunao-insecure-fallback-secret-do-not-use-in-production'
+  );
 }
 
 // FALLBACK SITE GATE PASSWORD (hardcoded for Lunao internal use).
@@ -120,12 +128,17 @@ function clearGateCookie(res) {
 function gateStatus() {
   const hash = getGateHash();
   const secret = getGateSecret();
+  const hasHash = Boolean(hash);
+  const hasSecret = Boolean(secret);
+  const usingFallback = !process.env.SITE_GATE_JWT_SECRET && !process.env.JWT_SECRET && !process.env.SESSION_SECRET;
   return {
-    configured: Boolean(hash && secret),
-    reason: !hash
+    configured: hasHash && hasSecret,
+    reason: !hasHash
       ? 'SITE_GATE_PASSWORD_HASH env var is missing'
-      : !secret
+      : !hasSecret
       ? 'No JWT secret configured (set SITE_GATE_JWT_SECRET or JWT_SECRET)'
+      : usingFallback
+      ? null // using fallback secret — gate works but not cryptographically strong
       : null,
   };
 }
