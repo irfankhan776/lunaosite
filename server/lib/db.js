@@ -128,6 +128,7 @@ const SCHEMA_SQL = `
     niche            TEXT,
     name             TEXT,
     status           TEXT    NOT NULL DEFAULT 'running',
+    type             TEXT    NOT NULL DEFAULT 'sms',
     total_leads      INTEGER NOT NULL DEFAULT 0,
     sites_generated  INTEGER NOT NULL DEFAULT 0,
     sms_sent         INTEGER NOT NULL DEFAULT 0,

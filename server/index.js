@@ -26,7 +26,7 @@ import path from 'node:path';
 import { PORT, SITES_DIR, ROOT_DIR, modeSummary, siteBaseUrl, telnyx, cloudflare, PUBLIC_API_BASE_URL } from './lib/config.js';
 import { compileSite } from './lib/compile.js';
 import { parseCsv, validateCsv } from './lib/csv.js';
-import { runPipeline, COST_PER_LEAD } from './lib/pipeline.js';
+import { runPipeline, COST_PER_LEAD, SITE_COST_PER_LEAD } from './lib/pipeline.js';
 import { listSites, readSite, writeSite, siteExists, isValidSlug, titleFromHtml, nicheFromHtml } from './lib/sites.js';
 import { publishBatch, validateCloudflareToken } from './lib/cloudflare.js';
 import { streamEdit, isAiEnabled, cleanHtmlOutput } from './lib/anthropic.js';
@@ -270,6 +270,92 @@ app.post('/api/campaign/run', async (req, res) => {
       niche,
       templateId,
       smsTemplate,
+      onEvent: send,
+      ownerKey,
+      campaignId,
+      leadIds,
+    });
+  } catch (err) {
+    send({ type: 'error', error: err.message });
+    if (campaignId) markCampaignFailed(campaignId, err.message);
+  } finally {
+    res.end();
+  }
+});
+
+// ---- Site Deploy Pipeline ----------------------------------------------------
+// Sites-only pipeline: compiles and deploys sites without SMS.
+// Cost: SITE_COST_PER_LEAD = 1 credit per lead (no SMS).
+app.post('/api/site-deploy/run', async (req, res) => {
+  const {
+    businesses,
+    csv,
+    niche,
+    templateId,
+    name,
+    plan,
+  } = req.body || {};
+
+  let ownerKey = req.body?.ownerKey || req.query?.ownerKey || null;
+  if (!ownerKey) {
+    const token = parseSessionCookie(req);
+    if (token) {
+      const payload = await verifySessionToken(token);
+      if (payload) ownerKey = `user_${payload.sub}`;
+    }
+  }
+
+  let leads = Array.isArray(businesses) ? businesses : [];
+  if (!leads.length && csv) leads = parseCsv(csv);
+
+  if (!leads.length) {
+    return res.status(400).json({ ok: false, error: 'No businesses or CSV provided' });
+  }
+
+  let campaignId = null;
+  let leadIds = [];
+  if (ownerKey) {
+    try {
+      const acct = ensureAccount(ownerKey, plan);
+      if (acct) {
+        const totalCost = leads.length * SITE_COST_PER_LEAD;
+        checkBalance(ownerKey, totalCost);
+
+        const c = createCampaign({
+          ownerKey,
+          niche,
+          name: name || null,
+          leads,
+          smsTemplate: null,
+          csv: typeof csv === 'string' ? csv : null,
+          type: 'site-deploy',
+        });
+        campaignId = c.id;
+        const stored = listLeads(c.id);
+        leadIds = stored.map((l) => l.id);
+        charge(ownerKey, totalCost, 'site_deploy_charge', { type: 'campaign', id: campaignId });
+      }
+    } catch (err) {
+      const status = err.status || 500;
+      return res.status(status).json({ ok: false, error: err.message, needed: err.needed, available: err.available });
+    }
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  const send = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+  if (campaignId) send({ type: 'campaign', campaignId });
+
+  try {
+    await runPipeline({
+      businesses: leads,
+      niche,
+      templateId,
+      skipSms: true,
       onEvent: send,
       ownerKey,
       campaignId,

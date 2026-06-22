@@ -7,7 +7,7 @@ export interface PipelineLead {
   phone?: string;
   city?: string;
   niche?: string;
-  [key: string]: string | undefined;
+  [key: string]: string | number | undefined;
 }
 
 export interface PipelineEvent {
@@ -119,6 +119,77 @@ export async function runCampaign(
   });
 
   // Pre-flight error (e.g. 402 insufficient credits) returns JSON, not SSE.
+  if (res.status === 402 || (res.status >= 400 && res.status < 500 && res.status !== 404)) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error || `Pipeline request failed (${res.status})`);
+    (err as any).status = res.status;
+    (err as any).needed = data.needed;
+    (err as any).available = data.available;
+    throw err;
+  }
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Pipeline request failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let summary: PipelineSummary | null = null;
+  let results: PipelineResultRow[] = [];
+  let campaignId: string | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() || '';
+    for (const chunk of chunks) {
+      const line = chunk.trim();
+      if (!line.startsWith('data:')) continue;
+      const json = line.slice(5).trim();
+      if (!json) continue;
+      try {
+        const event: PipelineEvent = JSON.parse(json);
+        if (event.type === 'campaign' && event.campaignId) {
+          campaignId = event.campaignId;
+        }
+        onEvent(event);
+        if (event.type === 'done') {
+          summary = event.summary;
+          results = event.results || [];
+        }
+      } catch {
+        /* ignore malformed chunk */
+      }
+    }
+  }
+
+  return { summary, results, campaignId };
+}
+
+// Sites-only pipeline: compiles and deploys sites without SMS.
+// Cost: 1 credit per lead (no SMS).
+export async function runSiteDeployCampaign(
+  params: {
+    businesses?: PipelineLead[];
+    csv?: string;
+    niche?: string;
+    templateId?: string;
+    name?: string;
+    ownerKey?: string;
+    plan?: string;
+  },
+  onEvent: (e: PipelineEvent) => void,
+): Promise<{ summary: PipelineSummary | null; results: PipelineResultRow[]; campaignId: string | null }> {
+  const res = await fetch(`${API_BASE}/api/site-deploy/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
   if (res.status === 402 || (res.status >= 400 && res.status < 500 && res.status !== 404)) {
     const data = await res.json().catch(() => ({}));
     const err = new Error(data.error || `Pipeline request failed (${res.status})`);

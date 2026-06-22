@@ -1,4 +1,5 @@
 export type CommandStatus = 'Active' | 'Completed' | 'Queued' | 'Crashed';
+export type CampaignType = 'sms' | 'site-deploy';
 
 export interface Campaign {
   id: string;
@@ -12,6 +13,7 @@ export interface Campaign {
   createdAt: string;
   templateId: string;
   errorReason?: string;
+  type?: CampaignType;
 }
 
 export interface Template {

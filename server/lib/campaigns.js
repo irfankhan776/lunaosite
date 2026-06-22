@@ -34,6 +34,7 @@ function rowToCampaign(row) {
     smsTemplate: row.sms_template,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+    type: row.type || 'sms',
   };
 }
 
@@ -81,14 +82,14 @@ function rowToSms(row) {
 
 // ---- Campaign lifecycle ---------------------------------------------------
 
-export function createCampaign({ ownerKey, niche, name, leads, smsTemplate, csv }) {
+export function createCampaign({ ownerKey, niche, name, leads, smsTemplate, csv, type = 'sms' }) {
   const id = newId();
   const now = Date.now();
   const txn = db.transaction(() => {
     db.prepare(
       `INSERT INTO campaigns
-         (id, owner_key, niche, name, status, total_leads, started_at, sms_template, csv_snapshot)
-       VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?)`,
+         (id, owner_key, niche, name, status, total_leads, started_at, sms_template, csv_snapshot, type)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
     ).run(
       id,
       ownerKey,
@@ -98,6 +99,7 @@ export function createCampaign({ ownerKey, niche, name, leads, smsTemplate, csv 
       now,
       smsTemplate || null,
       csv || null,
+      type,
     );
     if (Array.isArray(leads) && leads.length) {
       const insert = db.prepare(

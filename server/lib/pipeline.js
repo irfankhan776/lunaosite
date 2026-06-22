@@ -37,11 +37,14 @@ export const COST_PER_LEAD = 4;
 export const SMS_COST_PER_LEAD = 3;
 export const SITE_COST_PER_LEAD = 1;
 
+// When skipSms === true, Phase C is skipped entirely. Used by the
+// sites-only "Site Deploy" campaign flow.
 export async function runPipeline({
   businesses = [],
   niche,
   templateId = null, // explicit custom template ID — overrides niche template lookup
   smsTemplate,
+  skipSms = false,   // skip Phase C (SMS dispatch) — sites-only pipeline
   onEvent = () => {},
   // Server-side persistence + enforcement (optional but recommended).
   ownerKey = null,
@@ -67,7 +70,8 @@ export async function runPipeline({
     }
   }
   if (ownerKey && account) {
-    emit('credits:charged', { amount: businesses.length * COST_PER_LEAD, balance: account.balance, source: 'route' });
+    const charged = businesses.length * (skipSms ? SITE_COST_PER_LEAD : COST_PER_LEAD);
+    emit('credits:charged', { amount: charged, balance: account.balance, source: 'route' });
   }
 
   emit('start', {
@@ -179,7 +183,8 @@ export async function runPipeline({
     }
   }
 
-  // Phase C: dispatch SMS for every successfully generated site.
+  // Phase C: dispatch SMS — skipped when skipSms (sites-only pipeline).
+  if (!skipSms) {
   for (const result of results) {
     if (result.siteStatus !== 'generated') continue;
     const text = renderSms(template, {
@@ -328,6 +333,7 @@ export async function runPipeline({
       emit('sms:failed', { index: result.index, name: result.name, error: err.message });
     }
   }
+  } // end Phase C (SMS dispatch)
 
   const summary = {
     total: businesses.length,
@@ -342,7 +348,7 @@ export async function runPipeline({
   emit('done', { summary, results });
   if (useDb) {
     finalizeCampaign(campaignId, {
-      creditsCharged: businesses.length * COST_PER_LEAD,
+      creditsCharged: businesses.length * (skipSms ? SITE_COST_PER_LEAD : COST_PER_LEAD),
     });
   }
   return { summary, results };
