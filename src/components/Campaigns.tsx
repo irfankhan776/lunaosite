@@ -1241,9 +1241,9 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                         {nicheList.map((niche) => (
-                          <button key={niche} onClick={() => { playSoftTap(); setSelectedNiche(niche); setSdActiveStep(2); playGentleChime(2); }}
-                            className={`px-4 py-3 rounded-xl border text-xs font-semibold text-left transition-all ${selectedNiche === niche ? 'bg-accent-soft text-accent border-accent/30 shadow-sm' : 'bg-white text-ink border-border-light hover:border-accent/40 hover:bg-accent-soft/30'}`}>
-                            {niche}
+                          <button key={niche.id} onClick={() => { playSoftTap(); setSelectedNiche(niche.id); setSdActiveStep(2); playGentleChime(2); }}
+                            className={`px-4 py-3 rounded-xl border text-xs font-semibold text-left transition-all ${selectedNiche === niche.id ? 'bg-accent-soft text-accent border-accent/30 shadow-sm' : 'bg-white text-ink border-border-light hover:border-accent/40 hover:bg-accent-soft/30'}`}>
+                            {niche.emoji} {niche.label}
                           </button>
                         ))}
                       </div>
