@@ -17,14 +17,14 @@ interface DashboardProps {
   businesses: Business[];
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ 
-  campaigns, 
-  setCampaigns, 
+export const Dashboard: React.FC<DashboardProps> = ({
+  campaigns,
+  setCampaigns,
   setActiveTab,
+  businesses,
   setCampToEdit,
   setSelectedTemplate,
   setPreviewTemplateId,
-  businesses
 }) => {
   const [viewMode, setViewMode] = useState<'summary' | 'deployed-sites'>('summary');
   const [animatingBtn, setAnimatingBtn] = useState<string | null>(null);
