@@ -563,6 +563,9 @@ export const Campaigns: React.FC<CampaignsProps> = ({
     }
   }, [activeStep, isLaunching, campaignCreated]);
 
+  // Auto-scroll horizontally to the current Site Deploy wizard step indicator
+  const sdStepRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+
   // Textarea reference for inserting tokens
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -574,7 +577,8 @@ export const Campaigns: React.FC<CampaignsProps> = ({
   const [errorShakes, setErrorShakes] = useState<number>(0);
   const [latestCampId, setLatestCampId] = useState<string | null>(null);
 
-  // Site-deploy wizard state
+  // Campaign detail modal state
+  const [selectedSdCampaign, setSelectedSdCampaign] = useState<Campaign | null>(null);
   const [activeCampaignType, setActiveCampaignType] = useState<'sms' | 'site-deploy'>('site-deploy');
   const [sdActiveStep, setSdActiveStep] = useState<number>(1);
   const [sdSelectedTemplateId, setSdSelectedTemplateId] = useState<string>('t1');
@@ -592,6 +596,36 @@ export const Campaigns: React.FC<CampaignsProps> = ({
   const [sdSiteDeployResults, setSdSiteDeployResults] = useState<PipelineResultRow[]>([]);
   const [sdCampaignId, setSdCampaignId] = useState<string | null>(null);
   const [sdCampaignName, setSdCampaignName] = useState<string>('Site Deploy Campaign');
+
+  // Auto-scroll horizontally to the current Site Deploy wizard step indicator + scroll wizard into view
+  React.useEffect(() => {
+    const activeElem = sdStepRefs.current[sdActiveStep];
+    const trackElem = document.getElementById('wizard-steps-horizontal-track');
+    if (activeElem && trackElem) {
+      const trackRect = trackElem.getBoundingClientRect();
+      const elemRect = activeElem.getBoundingClientRect();
+      const offset = (elemRect.left - trackRect.left) + trackElem.scrollLeft - (trackRect.width / 2) + (elemRect.width / 2);
+      trackElem.scrollTo({ left: offset, behavior: 'smooth' });
+    }
+    const wizardCard = document.getElementById('campaigns-generator-wizard-card');
+    if (wizardCard) {
+      wizardCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      const container = document.getElementById('main-content-flow');
+      if (container) container.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [sdActiveStep]);
+
+  // Persist Site Deploy results to localStorage keyed by campaign id
+  React.useEffect(() => {
+    if (sdSiteDeployResults.length > 0 && sdCampaignId) {
+      try {
+        const stored = JSON.parse(localStorage.getItem('lunao_sd_results') || '{}');
+        stored[sdCampaignId] = sdSiteDeployResults;
+        localStorage.setItem('lunao_sd_results', JSON.stringify(stored));
+      } catch { /* ignore */ }
+    }
+  }, [sdSiteDeployResults, sdCampaignId]);
 
   const filteredCampaigns = campaigns.filter(c => {
     if (filterTab === 'All') return true;
@@ -1141,7 +1175,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
             {activeCampaignType === 'site-deploy' ? (
               [ { step: 1, name: 'Select Niche' }, { step: 2, name: 'Input Businesses' }, { step: 3, name: 'Choose Template' }, { step: 4, name: 'Deploy Preview' } ].map((item) => (
                 <React.Fragment key={item.step}>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div ref={el => { sdStepRefs.current[item.step] = el; }} className="flex items-center gap-3 shrink-0">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm ${sdActiveStep === item.step ? 'bg-accent text-white ring-4 ring-accent-soft' : sdActiveStep > item.step ? 'bg-success text-white' : 'bg-surface text-ink-secondary border border-border-main'}`}>
                       {sdActiveStep > item.step ? <Check className="w-4 h-4" /> : item.step}
                     </div>
@@ -1555,7 +1589,8 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                     : camp.status === 'Crashed' ? 'bg-danger/5 text-danger border-danger/20'
                     : 'bg-amber-50 text-amber-700 border-amber-200';
                   return (
-                    <div key={camp.id} className="relative bg-white border border-border-light rounded-xl overflow-hidden shadow-2xs hover:shadow-sm hover:-translate-y-0.5 transition-all group">
+                    <div key={camp.id} onClick={() => setSelectedSdCampaign(camp)}
+                      className="relative bg-white border border-border-light rounded-xl overflow-hidden shadow-2xs hover:shadow-sm hover:-translate-y-0.5 transition-all group cursor-pointer">
                       {/* Mini template thumbnail */}
                       <div className="h-16 bg-gradient-to-br from-accent/10 to-accent/5 border-b border-border-light flex items-center justify-center relative overflow-hidden">
                         {tpl ? (
@@ -1763,6 +1798,173 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                 </button>
               </div>
 
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Campaign Detail Modal ─────────────────────────────────── */}
+      {selectedSdCampaign && (() => {
+        const camp = selectedSdCampaign;
+        // Pull stored results from localStorage keyed by campaign id
+        let results: any[] = [];
+        try {
+          const stored = JSON.parse(localStorage.getItem('lunao_sd_results') || '{}');
+          results = stored[camp.id] || [];
+        } catch { /* ignore */ }
+
+        const tpl = [...templates, ...(customTemplates.map(t => ({ ...t, preview: '' })))].find(t => t.id === camp.templateId);
+        const okCount = results.filter((r: any) => r.siteStatus === 'generated').length;
+        const failedCount = results.filter((r: any) => r.siteStatus === 'failed').length;
+
+        const statusMeta = {
+          Completed: { bg: 'bg-success-soft', text: 'text-success', border: 'border-success/20', dot: 'bg-success' },
+          Active:   { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
+          Crashed:  { bg: 'bg-danger/5', text: 'text-danger', border: 'border-danger/20', dot: 'bg-danger' },
+          Queued:   { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200', dot: 'bg-amber-500' },
+        }[camp.status as string] ?? { bg: 'bg-surface', text: 'text-ink', border: 'border-border-main', dot: 'bg-ink-tertiary' };
+
+        return (
+          <div
+            className="fixed inset-0 bg-ink/50 backdrop-blur-sm z-50 flex items-start justify-center p-4 overflow-y-auto animate-fade-in"
+            onClick={(e) => { if (e.target === e.currentTarget) setSelectedSdCampaign(null); }}
+          >
+            <div className="bg-white border border-border-main rounded-2xl shadow-2xl w-full max-w-2xl my-6 flex flex-col overflow-hidden animate-slide-up">
+
+              {/* Modal header */}
+              <div className="relative px-6 pt-6 pb-5 bg-gradient-to-br from-accent-soft/60 to-white border-b border-border-light">
+                {/* Background texture accent */}
+                <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute top-4 right-4">
+                  <button
+                    onClick={() => setSelectedSdCampaign(null)}
+                    className="w-8 h-8 rounded-lg bg-white border border-border-light flex items-center justify-center text-ink-secondary hover:text-ink hover:bg-off-white transition-all shadow-sm cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex items-start gap-4 pr-10">
+                  {/* Template mini preview */}
+                  <div className="w-20 h-14 rounded-xl overflow-hidden border-2 border-accent/20 shadow-sm shrink-0 bg-surface flex items-center justify-center">
+                    {tpl ? (
+                      <TemplateSimPreview id={tpl.id} name={tpl.name} niche={tpl.niche} badge="" isMostUsed={tpl.isMostUsed} />
+                    ) : (
+                      <Globe className="w-8 h-8 text-accent/30" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <h3 className="text-lg font-serif font-semibold text-ink leading-tight truncate">{camp.name}</h3>
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${statusMeta.bg} ${statusMeta.text} ${statusMeta.border}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dot}`} />
+                        {camp.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink-secondary">{camp.niche} · {camp.createdAt}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Stats strip */}
+              <div className="grid grid-cols-3 divide-x divide-border-light border-b border-border-light">
+                {[
+                  { label: 'Sites Deployed', value: camp.sites || okCount, icon: <Globe className="w-4 h-4" />, color: 'text-accent' },
+                  { label: 'Leads Processed', value: camp.leadsFound || results.length || 0, icon: <Users className="w-4 h-4" />, color: 'text-blue-600' },
+                  { label: 'Failed', value: failedCount, icon: <X className="w-4 h-4" />, color: failedCount > 0 ? 'text-danger' : 'text-ink-tertiary' },
+                ].map((stat) => (
+                  <div key={stat.label} className="flex flex-col items-center justify-center py-4 gap-1.5">
+                    <div className={`${stat.color} opacity-60`}>{stat.icon}</div>
+                    <span className="text-xl font-bold font-mono text-ink">{stat.value}</span>
+                    <span className="text-[10px] text-ink-tertiary uppercase tracking-wider font-semibold">{stat.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Deployed sites list */}
+              <div className="flex-1 overflow-y-auto">
+                <div className="px-6 py-4 space-y-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Globe className="w-4 h-4 text-accent" />
+                    <h4 className="text-sm font-bold text-ink">Deployed Sites</h4>
+                  </div>
+                  {results.length === 0 ? (
+                    <div className="text-center py-8 text-ink-secondary">
+                      <Globe className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                      <p className="text-sm">No site data yet. Results are saved after deployment.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {results.map((r: any, idx: number) => {
+                        const lead = sdCsvLeads.find(l => l.index === r.index) || { business_name: r.name, city: r.city, phone_number: r.phone };
+                        const isGenerated = r.siteStatus === 'generated';
+                        return (
+                          <div key={r.index ?? idx} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${isGenerated ? 'bg-white border-border-main hover:border-accent/30' : 'bg-danger/5 border-danger/20'}`}>
+                            {/* Status icon */}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isGenerated ? 'bg-accent-soft text-accent' : 'bg-danger/10 text-danger'}`}>
+                              {isGenerated ? <CheckCircle className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                            </div>
+                            {/* Business info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-xs font-bold text-ink leading-tight">{lead.business_name || r.name || `Business ${idx + 1}`}</p>
+                                <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-bold border ${isGenerated ? 'bg-success-soft text-success border-success/20' : 'bg-danger/10 text-danger border-danger/20'}`}>
+                                  {isGenerated ? 'Live' : 'Failed'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 mt-0.5 text-[11px] text-ink-secondary">
+                                {lead.city && (
+                                  <span className="flex items-center gap-1">
+                                    <MapPin className="w-3 h-3 shrink-0" />{lead.city}
+                                  </span>
+                                )}
+                                {lead.phone_number && (
+                                  <span className="flex items-center gap-1">
+                                    <Smartphone className="w-3 h-3 shrink-0" />{lead.phone_number}
+                                  </span>
+                                )}
+                              </div>
+                              {isGenerated && r.siteUrl && (
+                                <a
+                                  href={r.siteUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 mt-1.5 text-[11px] text-accent font-semibold hover:underline truncate max-w-[240px]"
+                                >
+                                  <ExternalLink className="w-3 h-3 shrink-0" />
+                                  <span className="truncate">{r.siteUrl.replace('https://', '')}</span>
+                                </a>
+                              )}
+                              {r.error && (
+                                <p className="mt-1 text-[10px] text-danger font-medium">{r.error}</p>
+                              )}
+                            </div>
+                            {/* Site index badge */}
+                            <div className="shrink-0">
+                              <span className="inline-flex w-6 h-6 rounded-full bg-surface border border-border-light text-[10px] font-bold text-ink-tertiary items-center justify-center">
+                                {idx + 1}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal footer */}
+              <div className="px-6 py-4 border-t border-border-light bg-off-white flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2 text-[11px] text-ink-secondary">
+                  <Globe className="w-4 h-4" />
+                  <span>Site Deploy Campaign · {camp.templateId ? `Template: ${tpl?.name ?? camp.templateId}` : 'Template unknown'}</span>
+                </div>
+                <button
+                  onClick={() => setSelectedSdCampaign(null)}
+                  className="px-5 py-2 bg-accent hover:bg-accent-hover text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all cursor-pointer"
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
         );
