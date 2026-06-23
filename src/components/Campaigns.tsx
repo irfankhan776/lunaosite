@@ -8,6 +8,7 @@ import { nicheList } from '../data';
 import { getTemplateContent, getNicheBgImage } from './Templates';
 import { playGentleChime, playLaunchSwell, playVictoryCelebration, playSoftTap, playSoftBubble, playElegantBell, playSlideTick, playElegantError, playTiktokLike } from '../utils/audio';
 import { CelebrationEffect } from './CelebrationEffect';
+import { TemplateSimPreview } from './TemplateSimPreview';
 import { validateCsvFile, runCampaign, runSiteDeployCampaign, PipelineLead, PipelineResultRow, CsvValidation, listCustomTemplates, CustomTemplate } from '../lib/pipelineClient';
 
 interface CampaignsProps {
@@ -1371,75 +1372,32 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                           </div>
                         )}
 
-                        {/* Template grid */}
+                        {/* Template grid — rich dual-device previews, same as Templates page */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {nicheTemplates.map((tpl) => {
-                            const meta = getTemplateMetaForNiche(tpl.niche, tpl.id);
-                            return (
-                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
-                                <div className="aspect-[4/3] overflow-hidden relative">
-                                  <img src={tpl.preview} alt={tpl.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                  {meta?.logoEmoji && (
-                                    <div className="absolute top-2 left-2 w-7 h-7 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center text-base shadow-sm border border-white/50">
-                                      {meta.logoEmoji}
-                                    </div>
-                                  )}
-                                  {/* Hover overlay with actions */}
-                                  <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/40 transition-all duration-300 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setSelectedTemplateForPreview(tpl); }}
-                                      className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform cursor-pointer"
-                                      title="Preview template"
-                                    >
-                                      <Eye className="w-4 h-4 text-ink" />
-                                    </button>
-                                    <a
-                                      href={templatePreviewUrl(tpl.id)}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
-                                      title="Open full page"
-                                    >
-                                      <ExternalLink className="w-4 h-4 text-ink" />
-                                    </a>
-                                  </div>
-                                </div>
-                                <div className="p-3 bg-white space-y-0.5">
-                                  <p className="text-xs font-semibold text-ink">{tpl.name}</p>
-                                  <p className="text-[10px] text-ink-secondary capitalize">{tpl.niche}</p>
-                                </div>
-                                {sdSelectedTemplateId === tpl.id && (
-                                  <div className="absolute top-2 right-2 w-6 h-6 bg-accent text-white rounded-full flex items-center justify-center shadow-md">
-                                    <Check className="w-3.5 h-3.5" />
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                          {nicheTemplates.map((tpl) => (
+                            <TemplateSimPreview
+                              key={tpl.id}
+                              id={tpl.id}
+                              name={tpl.name}
+                              niche={tpl.niche}
+                              selected={sdSelectedTemplateId === tpl.id}
+                              onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}
+                              onPreview={() => { setSelectedTemplateForPreview(tpl); }}
+                              showActions
+                            />
+                          ))}
                           {nicheCustom.map((tpl) => (
-                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
-                              <div className="aspect-[4/3] bg-gradient-to-br from-accent/20 to-accent/5 flex items-center justify-center relative">
-                                <Layout className="w-12 h-12 text-accent/60" />
-                                <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/30 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); setSelectedTemplateForPreview(tpl as any); }}
-                                    className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform cursor-pointer"
-                                  >
-                                    <Eye className="w-4 h-4 text-ink" />
-                                  </button>
-                                </div>
-                              </div>
-                              <div className="p-3 bg-white space-y-0.5">
-                                <p className="text-xs font-semibold text-ink">{tpl.name}</p>
-                                <p className="text-[10px] text-accent">Custom Template</p>
-                              </div>
-                              {sdSelectedTemplateId === tpl.id && (
-                                <div className="absolute top-2 right-2 w-6 h-6 bg-accent text-white rounded-full flex items-center justify-center shadow-md">
-                                  <Check className="w-3.5 h-3.5" />
-                                </div>
-                              )}
-                            </div>
+                            <TemplateSimPreview
+                              key={tpl.id}
+                              id={tpl.id}
+                              name={tpl.name}
+                              niche={tpl.niche}
+                              subLabel="Custom Template"
+                              selected={sdSelectedTemplateId === tpl.id}
+                              onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}
+                              onPreview={() => { setSelectedTemplateForPreview(tpl as any); }}
+                              showActions
+                            />
                           ))}
                         </div>
 
@@ -1575,6 +1533,79 @@ export const Campaigns: React.FC<CampaignsProps> = ({
             ))}
           </div>
         </div>
+
+        {/* ── Site Deploy campaigns: dedicated card strip ── */}
+        {(() => {
+          const sdCampaigns = campaigns.filter(c => c.type === 'site-deploy').slice(0, 5);
+          if (sdCampaigns.length === 0) return null;
+          return (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-accent-soft border border-accent/20 flex items-center justify-center shrink-0">
+                  <Globe className="w-4 h-4 text-accent" />
+                </div>
+                <span className="text-sm font-semibold text-ink">Site Deploy Campaigns</span>
+                <span className="text-[10px] bg-accent-soft text-accent font-semibold px-1.5 py-0.5 rounded-full border border-accent/20">{sdCampaigns.length}</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {sdCampaigns.map((camp) => {
+                  const tpl = [...templates, ...(customTemplates.map(t => ({ ...t, preview: '' })))].find(t => t.id === camp.templateId);
+                  const statusColor = camp.status === 'Completed' ? 'bg-success-soft text-success border-success/20'
+                    : camp.status === 'Active' ? 'bg-blue-50 text-blue-700 border-blue-200'
+                    : camp.status === 'Crashed' ? 'bg-danger/5 text-danger border-danger/20'
+                    : 'bg-amber-50 text-amber-700 border-amber-200';
+                  return (
+                    <div key={camp.id} className="relative bg-white border border-border-light rounded-xl overflow-hidden shadow-2xs hover:shadow-sm hover:-translate-y-0.5 transition-all group">
+                      {/* Mini template thumbnail */}
+                      <div className="h-16 bg-gradient-to-br from-accent/10 to-accent/5 border-b border-border-light flex items-center justify-center relative overflow-hidden">
+                        {tpl ? (
+                          <div className="absolute inset-0 opacity-30">
+                            <TemplateSimPreview
+                              id={tpl.id}
+                              name={tpl.name}
+                              niche={tpl.niche}
+                              badge=""
+                              isMostUsed={tpl.isMostUsed}
+                            />
+                          </div>
+                        ) : (
+                          <Globe className="w-6 h-6 text-accent/40" />
+                        )}
+                        {/* Badge overlay */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-white/80 to-transparent" />
+                        {/* Status pill */}
+                        <span className={`absolute top-2 right-2 text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${statusColor}`}>
+                          {camp.status}
+                        </span>
+                      </div>
+                      {/* Card body */}
+                      <div className="p-3 space-y-1.5">
+                        <p className="text-xs font-semibold text-ink leading-tight line-clamp-1" title={camp.name}>{camp.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] bg-surface text-ink-secondary px-1.5 py-0.5 rounded font-medium border border-border-light">{camp.niche}</span>
+                        </div>
+                        <div className="flex items-center justify-between pt-1 border-t border-border-light">
+                          <div className="flex items-center gap-3">
+                            <div className="flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-ink font-mono">{camp.sites}</span>
+                              <span className="text-[8px] text-ink-tertiary uppercase tracking-wider">Sites</span>
+                            </div>
+                            <div className="w-px h-4 bg-border-light" />
+                            <div className="flex flex-col items-center">
+                              <span className="text-[10px] font-bold text-ink font-mono">{camp.leadsFound ?? Math.floor(camp.sites * 1.2)}</span>
+                              <span className="text-[8px] text-ink-tertiary uppercase tracking-wider">Leads</span>
+                            </div>
+                          </div>
+                          <span className="text-[9px] text-ink-tertiary font-mono">{camp.createdAt}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Campaign History Log Table */}
         <div className="border border-border-light rounded-lg overflow-x-auto text-sm" style={{ WebkitOverflowScrolling: 'touch' }}>
