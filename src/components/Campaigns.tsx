@@ -670,11 +670,12 @@ export const Campaigns: React.FC<CampaignsProps> = ({
     }
   };
 
-  // Handles CSV file upload for Site Deploy wizard — parses locally, no server round-trip needed.
+  // Site Deploy CSV upload — uses the exact same validateCsvFile() backend call as SMS outreach
+  // so both sections accept identical CSV files and show identical error states.
   const handleSdCsvFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.csv')) {
       playElegantError();
-      setSdCsvError('Invalid format. Please upload a .csv file.');
+      setSdCsvError('Invalid format. Please upload a spreadsheet ending in .csv');
       return;
     }
     playLaunchSwell();
@@ -683,73 +684,39 @@ export const Campaigns: React.FC<CampaignsProps> = ({
     setSdCsvValidation(null);
     setSdIsCsvParsing(true);
     try {
-      const text = await file.text();
-      const rows = text.trim().split('\n');
-      if (rows.length < 2) {
-        setSdCsvError('CSV appears empty or has no data rows.');
-        setSdIsCsvParsing(false);
-        return;
-      }
-      const headers = rows[0].split(',').map((h) => h.trim().toLowerCase());
-      const bizIdx = headers.indexOf('business_name');
-      const cityIdx = headers.indexOf('city');
-      const phoneIdx = headers.indexOf('phone_number');
-      if (bizIdx === -1 || cityIdx === -1 || phoneIdx === -1) {
-        const missing = ['business_name', 'city', 'phone_number'].filter(h => !headers.includes(h));
-        setSdCsvValidation({
-          ok: false,
-          detectedColumns: headers,
-          missingColumns: missing,
-          totalRows: rows.length - 1,
-          validCount: 0,
-          invalidCount: rows.length - 1,
-          leads: [],
-          invalidRows: [],
-          message: `Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Your CSV must include: business_name, city, phone_number`
-        });
+      const report = await validateCsvFile(file);
+      setSdCsvValidation(report);
+      setSdIsCsvParsing(false);
+
+      if (!report.ok || report.validCount === 0) {
+        playElegantError();
         setSdCsvLeads([]);
         setSdCsvParsedCount(0);
-        setSdIsCsvParsing(false);
-        playElegantError();
+        setSdCsvError(report.message || 'This CSV is not valid for a site deployment campaign.');
         return;
       }
-      const leads: PipelineLead[] = rows.slice(1).map((row, i) => {
-        const cols = row.split(',');
-        return {
-          business_name: cols[bizIdx]?.trim() || '',
-          city: cols[cityIdx]?.trim() || '',
-          phone_number: cols[phoneIdx]?.trim() || '',
-          index: i,
-        };
-      }).filter((l) => l.business_name);
-      const invalidCount = rows.length - 1 - leads.length;
-      const validation: CsvValidation = {
-        ok: true,
-        detectedColumns: headers,
-        missingColumns: [],
-        totalRows: rows.length - 1,
-        validCount: leads.length,
-        invalidCount,
-        leads,
-        invalidRows: [],
-        message: invalidCount > 0
-          ? `Parsed ${leads.length} valid rows. ${invalidCount} rows skipped (missing business name).`
-          : `All ${leads.length} rows are valid.`,
-      };
-      setSdCsvValidation(validation);
-      setSdCsvLeads(leads);
-      setSdCsvParsedCount(leads.length);
+
+      playVictoryCelebration();
+      // Backend returns leads with { name, phone, city } — map to UI display fields
+      const displayLeads = report.leads.map((l, i) => ({
+        business_name: l.name,
+        city: l.city || '',
+        phone_number: l.phone || '',
+        index: i,
+      }));
+      setSdCsvLeads(displayLeads);
+      setSdCsvParsedCount(report.validCount);
       setSdCampaignName(`${selectedNiche} Site Deploy — ${new Date().toLocaleDateString()}`);
-      setSdIsCsvParsing(false);
-      if (leads.length > 0) playVictoryCelebration();
-      else playGentleChime(2);
-    } catch (err) {
+      setSdActiveStep(3);
+    } catch {
       playElegantError();
       setSdCsvLeads([]);
+      setSdIsCsvParsing(false);
       setSdCsvParsedCount(0);
       setSdCsvValidation(null);
-      setSdCsvError('Could not read this CSV file. Make sure it is a valid .csv file.');
-      setSdIsCsvParsing(false);
+      setSdCsvError(
+        'Could not reach the pipeline server to validate this CSV. Start it with "npm run server" (or "npm run dev:all") and re-upload.',
+      );
     }
   };
 
@@ -1407,7 +1374,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                           {nicheTemplates.map((tpl) => {
                             const meta = getTemplateMetaForNiche(tpl.niche, tpl.id);
                             return (
-                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
+                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); playGentleChime(4); setSdActiveStep(4); }}>
                                 <div className="aspect-[4/3] overflow-hidden relative">
                                   <img src={tpl.preview} alt={tpl.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                                   {meta?.logoEmoji && (
@@ -1449,7 +1416,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                             );
                           })}
                           {nicheCustom.map((tpl) => (
-                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
+                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); playGentleChime(4); setSdActiveStep(4); }}>
                               <div className="aspect-[4/3] bg-gradient-to-br from-accent/20 to-accent/5 flex items-center justify-center relative">
                                 <Layout className="w-12 h-12 text-accent/60" />
                                 <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/30 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
@@ -1531,9 +1498,9 @@ export const Campaigns: React.FC<CampaignsProps> = ({
 
                   <div className="mt-8 pt-6 border-t border-border-light flex items-center justify-between">
                     <button disabled={sdActiveStep === 1} onClick={() => { playGentleChime(sdActiveStep - 1); setSdActiveStep(prev => prev - 1); }}
-                      className={`text-xs font-semibold px-4 py-2 border border-border-main rounded shadow-xs bg-white text-ink leading-none ${sdActiveStep === 1 ? 'opacity-40 cursor-not-allowed' : 'hover:bg-off-white'}`}>Back</button>
-                    {sdActiveStep < 4 && (
-                      <button onClick={() => { if (sdActiveStep === 2 && (!sdCsvValidation?.ok || sdCsvParsedCount === 0)) { playElegantError(); return; } playGentleChime(sdActiveStep + 1); setSdActiveStep(prev => prev + 1); }}
+                      className={`text-xs font-semibold px-4 py-2 border border-border-main rounded shadow-xs bg-white text-ink leading-none ${sdActiveStep === 1 ? 'opacity-0 pointer-events-none' : 'hover:bg-off-white'}`}>Back</button>
+                    {sdActiveStep === 3 && (
+                      <button onClick={() => { playGentleChime(4); setSdActiveStep(4); }}
                         className="text-xs font-semibold px-5 py-2.5 bg-accent hover:bg-accent-hover text-white rounded shadow-sm flex items-center gap-1.5 cursor-pointer">
                         <span>Next Step</span><ChevronRight className="w-4 h-4" />
                       </button>
