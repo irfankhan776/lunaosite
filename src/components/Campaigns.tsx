@@ -1513,8 +1513,10 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                       </button>
                     )}
                     {sdActiveStep === 3 && (
-                      <button onClick={() => { playGentleChime(4); setSdActiveStep(4); }}
-                        className="text-xs font-semibold px-5 py-2.5 bg-accent hover:bg-accent-hover text-white rounded shadow-sm flex items-center gap-1.5 cursor-pointer">
+                      <button
+                        onClick={() => { playGentleChime(4); setSdActiveStep(4); }}
+                        className={`text-xs font-semibold px-5 py-2.5 rounded shadow-sm flex items-center gap-1.5 cursor-pointer transition-all ${sdSelectedTemplateId ? 'bg-accent hover:bg-accent-hover text-white' : 'bg-surface text-ink-tertiary cursor-not-allowed'}`}
+                      >
                         <span>Next Step</span><ChevronRight className="w-4 h-4" />
                       </button>
                     )}
@@ -1701,7 +1703,6 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                     onClick={() => {
                       setSdSelectedTemplateId(selectedTemplateForPreview.id);
                       setSelectedTemplateForPreview(null);
-                      setSdActiveStep(4);
                     }}
                     className="px-5 py-2.5 bg-accent hover:bg-accent-hover text-white font-semibold text-xs uppercase tracking-wider rounded shadow-sm flex items-center gap-1.5 cursor-pointer"
                   >
