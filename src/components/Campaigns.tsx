@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Campaign, Template, Business, SmsLog } from '../types';
 import {
-  Plus, Play, Pause, Trash2, Eye, ChevronRight, Upload,
+  Plus, Play, Pause, Trash2, Eye, EyeOff, ExternalLink, ChevronRight, Upload,
   MapPin, Sliders, CheckCircle, Smartphone, SlidersHorizontal, Loader2, Sparkles, Check, Minus, Info, Users, Star, X, ShieldAlert, Send, Globe, Key, Compass, ShieldCheck, Layout, MessageSquare
 } from 'lucide-react';
 import { nicheList } from '../data';
@@ -683,54 +683,72 @@ export const Campaigns: React.FC<CampaignsProps> = ({
     setSdCsvValidation(null);
     setSdIsCsvParsing(true);
     try {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target?.result as string;
-        const rows = text.trim().split('\n');
-        if (rows.length < 2) {
-          setSdCsvError('CSV appears empty or has no data rows.');
-          setSdIsCsvParsing(false);
-          return;
-        }
-        const headers = rows[0].split(',').map((h) => h.trim().toLowerCase());
-        const bizIdx = headers.indexOf('business_name');
-        const cityIdx = headers.indexOf('city');
-        const phoneIdx = headers.indexOf('phone_number');
-        if (bizIdx === -1 || cityIdx === -1 || phoneIdx === -1) {
-          setSdCsvValidation({ ok: false, detectedColumns: headers, missingColumns: ['business_name', 'city', 'phone_number'].filter(h => !headers.includes(h)), totalRows: rows.length - 1, validCount: 0, invalidCount: rows.length - 1, leads: [], invalidRows: [], message: 'Missing required columns: business_name, city, phone_number' });
-          setSdIsCsvParsing(false);
-          playElegantError();
-          return;
-        }
-        const leads = rows.slice(1).map((row, i) => {
-          const cols = row.split(',');
-          return {
-            name: cols[bizIdx]?.trim() || '',
-            city: cols[cityIdx]?.trim() || '',
-            phone: cols[phoneIdx]?.trim() || '',
-            index: i,
-          };
-        }).filter((l) => l.name);
-        const validation: CsvValidation = { ok: true, detectedColumns: headers, missingColumns: [], totalRows: rows.length - 1, validCount: leads.length, invalidCount: rows.length - 1 - leads.length, leads, invalidRows: [], message: 'Valid' };
-        setSdCsvValidation(validation);
-        setSdCsvLeads(leads);
-        setSdCsvParsedCount(leads.length);
-        setSdCampaignName(`${selectedNiche} Site Deploy — ${new Date().toLocaleDateString()}`);
+      const text = await file.text();
+      const rows = text.trim().split('\n');
+      if (rows.length < 2) {
+        setSdCsvError('CSV appears empty or has no data rows.');
         setSdIsCsvParsing(false);
-        playVictoryCelebration();
-      };
-      reader.onerror = () => {
-        setSdCsvError('Failed to read the file.');
+        return;
+      }
+      const headers = rows[0].split(',').map((h) => h.trim().toLowerCase());
+      const bizIdx = headers.indexOf('business_name');
+      const cityIdx = headers.indexOf('city');
+      const phoneIdx = headers.indexOf('phone_number');
+      if (bizIdx === -1 || cityIdx === -1 || phoneIdx === -1) {
+        const missing = ['business_name', 'city', 'phone_number'].filter(h => !headers.includes(h));
+        setSdCsvValidation({
+          ok: false,
+          detectedColumns: headers,
+          missingColumns: missing,
+          totalRows: rows.length - 1,
+          validCount: 0,
+          invalidCount: rows.length - 1,
+          leads: [],
+          invalidRows: [],
+          message: `Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Your CSV must include: business_name, city, phone_number`
+        });
+        setSdCsvLeads([]);
+        setSdCsvParsedCount(0);
         setSdIsCsvParsing(false);
         playElegantError();
+        return;
+      }
+      const leads: PipelineLead[] = rows.slice(1).map((row, i) => {
+        const cols = row.split(',');
+        return {
+          business_name: cols[bizIdx]?.trim() || '',
+          city: cols[cityIdx]?.trim() || '',
+          phone_number: cols[phoneIdx]?.trim() || '',
+          index: i,
+        };
+      }).filter((l) => l.business_name);
+      const invalidCount = rows.length - 1 - leads.length;
+      const validation: CsvValidation = {
+        ok: true,
+        detectedColumns: headers,
+        missingColumns: [],
+        totalRows: rows.length - 1,
+        validCount: leads.length,
+        invalidCount,
+        leads,
+        invalidRows: [],
+        message: invalidCount > 0
+          ? `Parsed ${leads.length} valid rows. ${invalidCount} rows skipped (missing business name).`
+          : `All ${leads.length} rows are valid.`,
       };
-      reader.readAsText(file);
+      setSdCsvValidation(validation);
+      setSdCsvLeads(leads);
+      setSdCsvParsedCount(leads.length);
+      setSdCampaignName(`${selectedNiche} Site Deploy — ${new Date().toLocaleDateString()}`);
+      setSdIsCsvParsing(false);
+      if (leads.length > 0) playVictoryCelebration();
+      else playGentleChime(2);
     } catch (err) {
       playElegantError();
       setSdCsvLeads([]);
       setSdCsvParsedCount(0);
       setSdCsvValidation(null);
-      setSdCsvError('Could not read this CSV file.');
+      setSdCsvError('Could not read this CSV file. Make sure it is a valid .csv file.');
       setSdIsCsvParsing(false);
     }
   };
@@ -831,7 +849,12 @@ export const Campaigns: React.FC<CampaignsProps> = ({
     setTimeout(() => { setSdIsLaunching(false); setSdCampaignCreated(true); playVictoryCelebration(); }, 2200);
     const ownerKey = localStorage.getItem('lunao_owner_key') || `dash-${userPlan.replace(/\s+/g, '-')}`;
     if (!localStorage.getItem('lunao_owner_key')) localStorage.setItem('lunao_owner_key', ownerKey);
-    runSiteDeployCampaign({ businesses: sdCsvLeads, niche: selectedNiche, templateId: sdSelectedTemplateId, name: sdCampaignName || `${selectedNiche} Site Deploy`, ownerKey, plan: userPlan },
+    const backendLeads = sdCsvLeads.map(l => ({
+      name: l.business_name,
+      city: l.city,
+      phone: l.phone_number,
+    }));
+    runSiteDeployCampaign({ businesses: backendLeads, niche: selectedNiche, templateId: sdSelectedTemplateId, name: sdCampaignName || `${selectedNiche} Site Deploy`, ownerKey, plan: userPlan },
       (e) => { if (e.type === 'site:generated') { setCampaigns((prev) => prev.map((c) => c.id === newCampId ? { ...c, sites: (c.sites || 0) + 1 } : c)); } }
     ).then(({ results }) => {
       const ok = results.filter((r) => r.siteStatus === 'generated');
@@ -1270,6 +1293,44 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                         )}
                       </div>
                       {sdCsvError && <p className="text-xs text-danger bg-danger/5 border border-danger/20 rounded-lg px-3 py-2">{sdCsvError}</p>}
+                      {sdCsvValidation && !sdCsvValidation.ok && (
+                        <div className="bg-danger/5 border border-danger/20 rounded-xl p-4 space-y-3">
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 bg-danger/10 rounded-full flex items-center justify-center shrink-0 mt-0.5">
+                              <X className="w-4 h-4 text-danger" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-danger uppercase tracking-wide">CSV validation failed</p>
+                              <p className="text-xs text-danger/80 mt-1 leading-relaxed">{sdCsvValidation.message}</p>
+                            </div>
+                          </div>
+                          {sdCsvValidation.missingColumns.length > 0 && (
+                            <div className="bg-white/60 rounded-lg p-3 space-y-1.5">
+                              <p className="text-[10px] font-bold text-ink-secondary uppercase tracking-wide">Missing required columns</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {sdCsvValidation.missingColumns.map((col) => (
+                                  <span key={col} className="inline-flex items-center px-2 py-0.5 bg-danger/10 text-danger text-[10px] font-semibold rounded border border-danger/15">
+                                    {col}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {sdCsvValidation.detectedColumns.length > 0 && (
+                            <div className="bg-white/60 rounded-lg p-3 space-y-1.5">
+                              <p className="text-[10px] font-bold text-ink-secondary uppercase tracking-wide">Detected columns</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {sdCsvValidation.detectedColumns.map((col) => (
+                                  <span key={col} className="inline-flex items-center px-2 py-0.5 bg-surface text-ink text-[10px] font-medium rounded border border-border-main">
+                                    {col}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <p className="text-[10px] text-danger/70 font-medium">Your CSV header must include: <span className="font-semibold">business_name</span>, <span className="font-semibold">city</span>, <span className="font-semibold">phone_number</span></p>
+                        </div>
+                      )}
                       {sdCsvValidation?.ok && sdCsvParsedCount > 0 && (
                         <div className="bg-success-soft/50 border border-success/20 rounded-xl p-4">
                           <p className="text-xs font-semibold text-success mb-2">{sdCsvParsedCount} businesses validated</p>
@@ -1282,42 +1343,146 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                     </div>
                   )}
 
-                  {sdActiveStep === 3 && (
-                    <div className="space-y-5 animate-fade-in">
-                      <div className="space-y-1">
-                        <h3 className="font-serif text-2xl text-ink">Choose your template</h3>
-                        <p className="text-sm text-ink-secondary">Pick a template that matches the {selectedNiche} industry.</p>
+                  {sdActiveStep === 3 && (() => {
+                    const nicheTemplates = templates.filter((t) => t.niche === selectedNiche);
+                    const nicheCustom = customTemplates.filter((t) => t.niche === selectedNiche);
+                    const selectedTpl = [...templates, ...customTemplates].find((t) => t.id === sdSelectedTemplateId);
+                    const templateMeta = selectedTpl ? getTemplateMetaForNiche(selectedTpl.niche, selectedTpl.id) : null;
+                    const templateDesc = selectedTpl ? (() => {
+                      const isClassic = selectedTpl.id === 't1' || selectedTpl.id === 't3' || selectedTpl.id === 't5' || selectedTpl.id === 't7';
+                      const content = getTemplateContent(selectedTpl.id, 'Preview', selectedNiche);
+                      return content.heroSubTitle;
+                    })() : null;
+                    const templatePreviewUrl = (id: string) => {
+                      if (id === 't2') return '/barber-template-02.html';
+                      if (id === 't3') return '/salon-template-01.html';
+                      if (id === 't4') return '/dentist-template-01.html';
+                      if (id === 't5') return '/roofing-template-01.html';
+                      if (id === 't6') return '/hvac-template-01.html';
+                      if (id === 't7') return '/gym-template-01.html';
+                      if (id === 't8') return '/realestate-template-01.html';
+                      return '/barber-template.html';
+                    };
+                    return (
+                      <div className="space-y-5 animate-fade-in">
+                        <div className="space-y-1">
+                          <h3 className="font-serif text-2xl text-ink">Choose your template</h3>
+                          <p className="text-sm text-ink-secondary">Pick a template that matches the {selectedNiche} industry.</p>
+                        </div>
+
+                        {/* Selected template detail panel */}
+                        {selectedTpl && (
+                          <div className="flex items-center gap-4 p-4 bg-off-white border border-border-main rounded-xl">
+                            <div className="w-20 h-14 rounded-lg overflow-hidden shrink-0 border border-border-light bg-white">
+                              <img src={selectedTpl.preview} alt={selectedTpl.name} className="w-full h-full object-cover" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-sm font-bold text-ink">{selectedTpl.name}</p>
+                                {templateMeta?.logoEmoji && <span className="text-base">{templateMeta.logoEmoji}</span>}
+                              </div>
+                              {templateDesc && <p className="text-xs text-ink-secondary line-clamp-1">{templateDesc}</p>}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                onClick={() => { setSelectedTemplateForPreview(selectedTpl); }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-border-main text-xs font-semibold text-ink rounded-lg hover:bg-accent-soft hover:border-accent/40 transition-all shadow-2xs cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Preview
+                              </button>
+                              <a
+                                href={templatePreviewUrl(selectedTpl.id)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-border-main text-xs font-semibold text-accent rounded-lg hover:bg-accent-soft hover:border-accent/40 transition-all shadow-2xs"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5" /> Full Page
+                              </a>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Template grid */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {nicheTemplates.map((tpl) => {
+                            const meta = getTemplateMetaForNiche(tpl.niche, tpl.id);
+                            return (
+                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
+                                <div className="aspect-[4/3] overflow-hidden relative">
+                                  <img src={tpl.preview} alt={tpl.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                                  {meta?.logoEmoji && (
+                                    <div className="absolute top-2 left-2 w-7 h-7 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center text-base shadow-sm border border-white/50">
+                                      {meta.logoEmoji}
+                                    </div>
+                                  )}
+                                  {/* Hover overlay with actions */}
+                                  <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/40 transition-all duration-300 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setSelectedTemplateForPreview(tpl); }}
+                                      className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform cursor-pointer"
+                                      title="Preview template"
+                                    >
+                                      <Eye className="w-4 h-4 text-ink" />
+                                    </button>
+                                    <a
+                                      href={templatePreviewUrl(tpl.id)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform"
+                                      title="Open full page"
+                                    >
+                                      <ExternalLink className="w-4 h-4 text-ink" />
+                                    </a>
+                                  </div>
+                                </div>
+                                <div className="p-3 bg-white space-y-0.5">
+                                  <p className="text-xs font-semibold text-ink">{tpl.name}</p>
+                                  <p className="text-[10px] text-ink-secondary capitalize">{tpl.niche}</p>
+                                </div>
+                                {sdSelectedTemplateId === tpl.id && (
+                                  <div className="absolute top-2 right-2 w-6 h-6 bg-accent text-white rounded-full flex items-center justify-center shadow-md">
+                                    <Check className="w-3.5 h-3.5" />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {nicheCustom.map((tpl) => (
+                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
+                              <div className="aspect-[4/3] bg-gradient-to-br from-accent/20 to-accent/5 flex items-center justify-center relative">
+                                <Layout className="w-12 h-12 text-accent/60" />
+                                <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/30 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setSelectedTemplateForPreview(tpl as any); }}
+                                    className="w-8 h-8 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-transform cursor-pointer"
+                                  >
+                                    <Eye className="w-4 h-4 text-ink" />
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="p-3 bg-white space-y-0.5">
+                                <p className="text-xs font-semibold text-ink">{tpl.name}</p>
+                                <p className="text-[10px] text-accent">Custom Template</p>
+                              </div>
+                              {sdSelectedTemplateId === tpl.id && (
+                                <div className="absolute top-2 right-2 w-6 h-6 bg-accent text-white rounded-full flex items-center justify-center shadow-md">
+                                  <Check className="w-3.5 h-3.5" />
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {nicheTemplates.length === 0 && nicheCustom.length === 0 && (
+                          <div className="text-center py-12 text-ink-secondary">
+                            <Layout className="w-10 h-10 mx-auto mb-3 opacity-40" />
+                            <p className="text-sm">No templates found for this niche.</p>
+                          </div>
+                        )}
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {templates.filter((t) => t.niche === selectedNiche).map((tpl) => (
-                          <button key={tpl.id} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}
-                            className={`group relative rounded-xl overflow-hidden border-2 transition-all ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md' : 'border-border-light hover:border-accent/50'}`}>
-                            <div className="aspect-[4/3] overflow-hidden">
-                              <img src={tpl.preview} alt={tpl.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                            </div>
-                            <div className="p-3 bg-white">
-                              <p className="text-xs font-semibold text-ink">{tpl.name}</p>
-                              <p className="text-[10px] text-ink-secondary capitalize">{tpl.niche}</p>
-                            </div>
-                            {sdSelectedTemplateId === tpl.id && <div className="absolute top-2 right-2 w-5 h-5 bg-accent text-white rounded-full flex items-center justify-center"><Check className="w-3 h-3" /></div>}
-                          </button>
-                        ))}
-                        {customTemplates.filter((t) => t.niche === selectedNiche).map((tpl) => (
-                          <button key={tpl.id} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}
-                            className={`group relative rounded-xl overflow-hidden border-2 transition-all ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md' : 'border-border-light hover:border-accent/50'}`}>
-                            <div className="aspect-[4/3] bg-gradient-to-br from-accent/10 to-accent/5 flex items-center justify-center">
-                              <Layout className="w-10 h-10 text-accent" />
-                            </div>
-                            <div className="p-3 bg-white">
-                              <p className="text-xs font-semibold text-ink">{tpl.name}</p>
-                              <p className="text-[10px] text-accent">Custom Template</p>
-                            </div>
-                            {sdSelectedTemplateId === tpl.id && <div className="absolute top-2 right-2 w-5 h-5 bg-accent text-white rounded-full flex items-center justify-center"><Check className="w-3 h-3" /></div>}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {sdActiveStep === 4 && (
                     <div className="space-y-5 animate-fade-in">
