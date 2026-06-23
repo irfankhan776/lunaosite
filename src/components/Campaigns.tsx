@@ -707,7 +707,6 @@ export const Campaigns: React.FC<CampaignsProps> = ({
       setSdCsvLeads(displayLeads);
       setSdCsvParsedCount(report.validCount);
       setSdCampaignName(`${selectedNiche} Site Deploy — ${new Date().toLocaleDateString()}`);
-      setSdActiveStep(3);
     } catch {
       playElegantError();
       setSdCsvLeads([]);
@@ -1044,6 +1043,8 @@ export const Campaigns: React.FC<CampaignsProps> = ({
   const handleResetSdWizard = () => {
     setSdActiveStep(1); setSdCampaignCreated(false); setSdCampaignName(`${selectedNiche} Site Deploy`);
     setSdCsvFileName(null); setSdCsvParsedCount(0); setSdCsvLeads([]); setSdCsvValidation(null); setSdCsvError(null); setSdLaunchError(null); setSdSiteDeployResults([]); setSdCampaignId(null);
+    const firstForNiche = templates.find((t) => t.niche === selectedNiche);
+    if (firstForNiche) setSdSelectedTemplateId(firstForNiche.id);
   };
 
   useEffect(() => {
@@ -1176,6 +1177,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
             <>
               {sdCampaignCreated ? (
                 <div className="text-center py-8 space-y-6 animate-fade-in">
+                  <CelebrationEffect />
                   <div className="w-16 h-16 bg-accent-soft text-accent rounded-full flex items-center justify-center mx-auto border border-accent/20">
                     <Globe className="w-8 h-8" />
                   </div>
@@ -1202,7 +1204,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                       ))}
                     </div>
                   )}
-                  <button onClick={handleResetSdWizard} className="px-5 py-2.5 bg-accent hover:bg-accent-hover text-white text-xs font-semibold rounded-md shadow-sm">Deploy More Sites</button>
+                  <button onClick={handleResetSdWizard} className="px-5 py-2.5 bg-accent hover:bg-accent-hover text-white text-xs font-semibold rounded-md shadow-sm">Launch Another Campaign</button>
                 </div>
               ) : sdIsLaunching ? (
                 <div className="text-center py-10 space-y-6 max-w-sm mx-auto animate-fade-in">
@@ -1374,7 +1376,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                           {nicheTemplates.map((tpl) => {
                             const meta = getTemplateMetaForNiche(tpl.niche, tpl.id);
                             return (
-                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); playGentleChime(4); setSdActiveStep(4); }}>
+                              <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
                                 <div className="aspect-[4/3] overflow-hidden relative">
                                   <img src={tpl.preview} alt={tpl.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                                   {meta?.logoEmoji && (
@@ -1416,7 +1418,7 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                             );
                           })}
                           {nicheCustom.map((tpl) => (
-                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); playGentleChime(4); setSdActiveStep(4); }}>
+                            <div key={tpl.id} className={`group relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer ${sdSelectedTemplateId === tpl.id ? 'border-accent shadow-md ring-2 ring-accent/20' : 'border-border-light hover:border-accent/50'}`} onClick={() => { playSoftTap(); setSdSelectedTemplateId(tpl.id); }}>
                               <div className="aspect-[4/3] bg-gradient-to-br from-accent/20 to-accent/5 flex items-center justify-center relative">
                                 <Layout className="w-12 h-12 text-accent/60" />
                                 <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/30 transition-all duration-300 flex items-center justify-center opacity-0 group-hover:opacity-100">
@@ -1496,9 +1498,20 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                     </div>
                   )}
 
-                  <div className="mt-8 pt-6 border-t border-border-light flex items-center justify-between">
+                  <div className="mt-8 pt-6 border-t border-border-light flex flex-wrap items-center justify-between gap-3">
                     <button disabled={sdActiveStep === 1} onClick={() => { playGentleChime(sdActiveStep - 1); setSdActiveStep(prev => prev - 1); }}
                       className={`text-xs font-semibold px-4 py-2 border border-border-main rounded shadow-xs bg-white text-ink leading-none ${sdActiveStep === 1 ? 'opacity-0 pointer-events-none' : 'hover:bg-off-white'}`}>Back</button>
+                    {sdActiveStep === 2 && (
+                      <button
+                        onClick={() => {
+                          if (!sdCsvValidation?.ok || sdCsvParsedCount === 0) { playElegantError(); return; }
+                          playGentleChime(3); setSdActiveStep(3);
+                        }}
+                        className={`text-xs font-semibold px-5 py-2.5 rounded shadow-sm flex items-center gap-1.5 cursor-pointer transition-all ${sdCsvValidation?.ok && sdCsvParsedCount > 0 ? 'bg-accent hover:bg-accent-hover text-white' : 'bg-surface text-ink-tertiary cursor-not-allowed'}`}
+                      >
+                        <span>Next Step</span><ChevronRight className="w-4 h-4" />
+                      </button>
+                    )}
                     {sdActiveStep === 3 && (
                       <button onClick={() => { playGentleChime(4); setSdActiveStep(4); }}
                         className="text-xs font-semibold px-5 py-2.5 bg-accent hover:bg-accent-hover text-white rounded shadow-sm flex items-center gap-1.5 cursor-pointer">
@@ -1686,8 +1699,9 @@ export const Campaigns: React.FC<CampaignsProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedTemplateId(selectedTemplateForPreview.id);
+                      setSdSelectedTemplateId(selectedTemplateForPreview.id);
                       setSelectedTemplateForPreview(null);
+                      setSdActiveStep(4);
                     }}
                     className="px-5 py-2.5 bg-accent hover:bg-accent-hover text-white font-semibold text-xs uppercase tracking-wider rounded shadow-sm flex items-center gap-1.5 cursor-pointer"
                   >
